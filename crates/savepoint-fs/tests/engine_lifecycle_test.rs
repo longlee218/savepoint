@@ -55,6 +55,16 @@ fn test_engine_transaction_lifecycle() {
     );
     assert!(ws.join("src/utils.rs").exists());
 
+    // 5.1 REDO / FAST-FORWARD to Turn 2!
+    ShadowEngine::rewind(&mut tx, 2).expect("Fast-forward to Turn 2 failed");
+    assert_eq!(fs::read_to_string(ws.join("src/lib.rs")).unwrap(), "// CORRUPTED CODE");
+    assert!(!ws.join("src/utils.rs").exists());
+
+    // 5.2 REWIND back to Turn 1 again!
+    ShadowEngine::rewind(&mut tx, 1).expect("Rewind to Turn 1 failed");
+    assert_eq!(fs::read_to_string(ws.join("src/lib.rs")).unwrap(), "pub fn add(a: i32, b: i32) -> i32 { a + b }");
+    assert!(ws.join("src/utils.rs").exists());
+
     // 6. COMMIT
     ShadowEngine::commit(&mut tx).expect("Commit failed");
     assert_eq!(tx.status, TransactionStatus::Committed);

@@ -348,12 +348,17 @@ pub fn run_cli() -> anyhow::Result<()> {
                 }
             };
 
+            let prev_step = tx.active_step();
             let start = Instant::now();
             ShadowEngine::rewind(&mut tx, to)?;
             let elapsed = start.elapsed();
 
-            println!("\x1b[32m✔ [Savepoint]\x1b[0m ⏪ Rewound to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", to, elapsed);
-            println!("  Current step is now #{}.", tx.current_step() - 1);
+            if to >= prev_step {
+                println!("\x1b[32m✔ [Savepoint]\x1b[0m ⏩ Fast-forwarded (Redo) to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", to, elapsed);
+            } else {
+                println!("\x1b[32m✔ [Savepoint]\x1b[0m ⏪ Rewound (Undo) to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", to, elapsed);
+            }
+            println!("  Current step is now #{}.", tx.active_step());
         }
         Commands::Commit { path } => {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {

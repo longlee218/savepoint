@@ -87,11 +87,11 @@ impl ShadowEngine {
         // Take snapshot of current workspace state
         clone_tree(&tx.workspace_root, &current_cp_path)?;
 
-        // Compute deltas from previous checkpoint
-        let prev_cp = tx.checkpoints.last().ok_or_else(|| {
+        // Compute deltas from the checkpoint the workspace was based on
+        let base_cp = tx.active_checkpoint().or_else(|| tx.checkpoints.last()).ok_or_else(|| {
             SavepointError::Other("Transaction has no previous checkpoint".to_string())
         })?;
-        let deltas = compute_deltas(&prev_cp.snapshot_path, &current_cp_path)?;
+        let deltas = compute_deltas(&base_cp.snapshot_path, &current_cp_path)?;
 
         let cp = Checkpoint {
             step_index: next_step,
@@ -103,13 +103,14 @@ impl ShadowEngine {
         };
 
         tx.checkpoints.push(cp.clone());
+        tx.current_step_index = Some(next_step);
         Self::save_metadata(tx)?;
 
         Ok(cp)
     }
 
-    /// Rewinds the workspace back to `target_step` in milliseconds.
-    /// Delta-reverts only the files that changed since `target_step`.
+    /// Rewinds or fast-forwards the workspace to `target_step` in milliseconds.
+    /// Non-destructive: preserves all future/past checkpoints and saves live edits if present.
     pub fn rewind(tx: &mut Transaction, target_step: usize) -> Result<()> {
         if tx.status != TransactionStatus::Active {
             return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
@@ -122,7 +123,20 @@ impl ShadowEngine {
             .ok_or_else(|| SavepointError::CheckpointNotFound(target_step, tx.id.to_string()))?
             .clone();
 
-        // Calculate differences between target snapshot and current workspace
+        // 1. SAFETY-NET CHECKPOINT:
+        // Before jumping, check if current workspace has uncommitted changes!
+        // If it does, freeze a safety checkpoint so user NEVER loses code!
+        if let Ok(live_deltas) = Self::compute_live_deltas(tx) {
+            if !live_deltas.is_empty() {
+                let _ = Self::checkpoint(
+                    tx,
+                    Some(&format!("Tự động lưu: Trước khi chuyển sang Bước #{}", target_step)),
+                    None,
+                );
+            }
+        }
+
+        // 2. Perform delta rollback / fast-forward to target_step:
         let deltas = compute_deltas(&target_cp.snapshot_path, &tx.workspace_root)?;
 
         for delta in deltas {
@@ -131,7 +145,7 @@ impl ShadowEngine {
 
             match delta.kind {
                 ChangeKind::Created => {
-                    // File was created AFTER target_step -> delete it
+                    // File exists in workspace but not in target snapshot -> delete it
                     if target_file_in_ws.exists() {
                         if target_file_in_ws.is_dir() {
                             let _ = fs::remove_dir_all(&target_file_in_ws);
@@ -155,32 +169,43 @@ impl ShadowEngine {
             }
         }
 
-        // Prune checkpoints after target_step
-        tx.checkpoints.retain(|cp| cp.step_index <= target_step);
+        // 3. DO NOT PRUNE! Update current_step_index so the entire timeline remains intact!
+        tx.current_step_index = Some(target_step);
         Self::save_metadata(tx)?;
 
         Ok(())
     }
 
-    /// Rewinds one step back (to the previous checkpoint).
+    /// Rewinds one step back (to the previous checkpoint before the active step).
     /// Returns the target step index that was restored, or None if already at baseline.
     pub fn rewind_previous(tx: &mut Transaction) -> Result<Option<usize>> {
-        if tx.checkpoints.len() <= 1 {
+        let current_step = tx.active_step();
+        if current_step == 0 {
             return Ok(None);
         }
 
-        let target_step = tx.checkpoints[tx.checkpoints.len() - 2].step_index;
-        Self::rewind(tx, target_step)?;
-        Ok(Some(target_step))
+        let prev_cp = tx
+            .checkpoints
+            .iter()
+            .filter(|cp| cp.step_index < current_step)
+            .max_by_key(|cp| cp.step_index);
+
+        if let Some(target_cp) = prev_cp {
+            let target_step = target_cp.step_index;
+            Self::rewind(tx, target_step)?;
+            Ok(Some(target_step))
+        } else {
+            Ok(None)
+        }
     }
 
-    /// Computes differences between the latest saved checkpoint and the current live workspace.
+    /// Computes differences between the active checkpoint and the current live workspace.
     pub fn compute_live_deltas(tx: &Transaction) -> Result<Vec<FileDelta>> {
-        let latest_cp = tx.checkpoints.last().ok_or_else(|| {
+        let active_cp = tx.active_checkpoint().ok_or_else(|| {
             SavepointError::Other("Transaction has no checkpoints".to_string())
         })?;
 
-        compute_deltas(&latest_cp.snapshot_path, &tx.workspace_root)
+        compute_deltas(&active_cp.snapshot_path, &tx.workspace_root)
     }
 
     /// Commits the active transaction, cementing changes.
@@ -203,12 +228,31 @@ impl ShadowEngine {
         })?;
 
         let ws_storage = Self::resolve_storage_dir(&ws);
+
+        // Check active pointer file first
+        let pointer_file = ws_storage.join("active_tx_id.txt");
+        if pointer_file.exists() {
+            if let Ok(tx_id_str) = fs::read_to_string(&pointer_file) {
+                let tx_dir = ws_storage.join("transactions").join(tx_id_str.trim());
+                let meta_file = tx_dir.join("meta.json");
+                if meta_file.exists() {
+                    if let Ok(content) = fs::read_to_string(&meta_file) {
+                        if let Ok(tx) = serde_json::from_str::<Transaction>(&content) {
+                            if tx.status == TransactionStatus::Active {
+                                return Ok(Some(tx));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let tx_base = ws_storage.join("transactions");
         if !tx_base.exists() {
             return Ok(None);
         }
 
-        // Find the latest active transaction
+        // Fallback: Find the newest active transaction sorted by created_at
         let mut active_tx: Option<Transaction> = None;
         for entry in fs::read_dir(tx_base).map_err(|e| SavepointError::Io {
             path: ws.clone(),
@@ -220,8 +264,15 @@ impl ShadowEngine {
                 if let Ok(content) = fs::read_to_string(&meta_file) {
                     if let Ok(tx) = serde_json::from_str::<Transaction>(&content) {
                         if tx.status == TransactionStatus::Active {
-                            active_tx = Some(tx);
-                            break;
+                            match &active_tx {
+                                Some(curr) if tx.created_at > curr.created_at => {
+                                    active_tx = Some(tx);
+                                }
+                                None => {
+                                    active_tx = Some(tx);
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 }
@@ -238,6 +289,14 @@ impl ShadowEngine {
             path: meta_path,
             source: e,
         })?;
+
+        // Update active pointer
+        if let Some(ws_storage) = tx.shadow_root.parent().and_then(|p| p.parent()) {
+            if tx.status == TransactionStatus::Active {
+                let _ = fs::write(ws_storage.join("active_tx_id.txt"), tx.id.as_str());
+            }
+        }
+
         Ok(())
     }
 }

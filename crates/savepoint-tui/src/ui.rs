@@ -24,7 +24,7 @@ pub fn render_ui(f: &mut Frame, app: &TimelineApp) {
 
     // If confirmation modal is open, render it centered on top
     if let ViewMode::ConfirmingRewind(step) = app.mode {
-        render_confirm_modal(f, step);
+        render_confirm_modal(f, step, app.tx.active_step());
     }
 }
 
@@ -90,11 +90,21 @@ fn render_steps_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
                     Style::default().fg(Color::White)
                 };
 
+                let active_step = app.tx.active_step();
+                let (badge, badge_style) = if cp.step_index == active_step {
+                    (" [ĐANG Ở ĐÂY] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                } else if cp.step_index > active_step {
+                    (" [Tương lai ⏩] ", Style::default().fg(Color::Magenta))
+                } else {
+                    (" [Quá khứ ⏪] ", Style::default().fg(Color::DarkGray))
+                };
+
                 let step_title = format!("{}Bước #{} ", icon, cp.step_index);
                 let prompt_desc = cp.prompt.as_deref().unwrap_or("Mốc khởi đầu");
 
                 let line = Line::from(vec![
                     Span::styled(step_title, style),
+                    Span::styled(badge, badge_style),
                     Span::styled(format!("({} files) ", cp.deltas.len()), Style::default().fg(Color::DarkGray)),
                     Span::styled(prompt_desc, style),
                 ]);
@@ -199,17 +209,36 @@ fn render_details(f: &mut Frame, area: Rect, app: &TimelineApp) {
                 }
             }
 
+            let active_step = app.tx.active_step();
             lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("💡 Bấm phím ", Style::default().fg(Color::DarkGray)),
-                Span::styled("[r]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::raw(" hoặc "),
-                Span::styled("[Enter]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(
-                    format!(" để mở xác nhận quay về Bước #{}", cp.step_index),
-                    Style::default().fg(Color::Green),
-                ),
-            ]));
+            if cp.step_index == active_step {
+                lines.push(Line::from(vec![
+                    Span::styled("✔ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled("Thư mục dự án đang ở chính xác mốc này.", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+            } else if cp.step_index > active_step {
+                lines.push(Line::from(vec![
+                    Span::styled("💡 Bấm phím ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("[r]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::raw(" hoặc "),
+                    Span::styled("[Enter]", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        format!(" để TUA TỚI (Redo ⏩) Bước #{}", cp.step_index),
+                        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("💡 Bấm phím ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("[r]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::raw(" hoặc "),
+                    Span::styled("[Enter]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        format!(" để TUA NGƯỢC (Undo ⏪) về Bước #{}", cp.step_index),
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
         }
         None => {
             lines.push(Line::from(Span::raw("Chưa chọn bước nào")));
@@ -228,42 +257,55 @@ fn render_details(f: &mut Frame, area: Rect, app: &TimelineApp) {
     f.render_widget(p, area);
 }
 
-fn render_confirm_modal(f: &mut Frame, step: usize) {
-    let area = centered_rect(65, 30, f.area());
+fn render_confirm_modal(f: &mut Frame, target_step: usize, active_step: usize) {
+    let area = centered_rect(68, 32, f.area());
     f.render_widget(Clear, area);
+
+    let (title, color, prompt_action, note) = if target_step > active_step {
+        (
+            "  ⏩  XÁC NHẬN TUA TỚI TƯƠNG LAI (REDO / FAST-FORWARD)  ",
+            Color::Magenta,
+            "TUA TỚI (Redo)",
+            "  (Savepoint sẽ khôi phục lại mã nguồn của mốc tương lai này trong 1ms!)",
+        )
+    } else {
+        (
+            "  ⏪  XÁC NHẬN TUA NGƯỢC THỜI GIAN (UNDO / REWIND)  ",
+            Color::Yellow,
+            "TUA NGƯỢC (Undo)",
+            "  (Mọi thay đổi chưa lưu sẽ được tự động sao lưu an toàn trước khi tua!)",
+        )
+    };
 
     let text = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled(
-                "  ⚠️  XÁC NHẬN TUA NGƯỢC THỜI GIAN (REWIND)  ",
-                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+                title,
+                Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::raw("  Bạn có chắc chắn muốn đưa toàn bộ dự án quay về "),
-            Span::styled(format!("Bước #{}", step), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("  Bạn có chắc chắn muốn {} toàn bộ dự án về ", prompt_action)),
+            Span::styled(format!("Bước #{}", target_step), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw("?"),
         ]),
         Line::from(""),
-        Line::from(Span::styled(
-            "  (Lưu ý: Mọi thay đổi do AI làm sau bước này sẽ bị hủy bỏ!)",
-            Style::default().fg(Color::Red),
-        )),
+        Line::from(Span::styled(note, Style::default().fg(Color::Green))),
         Line::from(""),
         Line::from(vec![
             Span::styled("  👉 [y / Enter] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Đồng ý hoàn nguyên        "),
+            Span::raw("Đồng ý chuyển mốc        "),
             Span::styled("  [n / Esc] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
             Span::raw("Hủy bỏ"),
         ]),
     ];
 
     let block = Block::default()
-        .title(" Cảnh Báo An Toàn ")
+        .title(" Điều Hướng Thời Gian ")
         .borders(Borders::ALL)
-        .style(Style::default().fg(Color::Yellow));
+        .style(Style::default().fg(color));
 
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, area);
@@ -274,7 +316,7 @@ fn render_footer(f: &mut Frame, area: Rect) {
         Span::styled(" [↑ / ↓] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw("Chọn bước   "),
         Span::styled(" [r / Enter] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw("Tua về bước này   "),
+        Span::raw("Tua thời gian (Undo/Redo)   "),
         Span::styled(" [c] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
         Span::raw("Chốt lưu (Commit)   "),
         Span::styled(" [q / Esc] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),

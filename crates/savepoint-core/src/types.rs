@@ -74,6 +74,8 @@ pub struct Transaction {
     pub created_at: DateTime<Utc>,
     pub status: TransactionStatus,
     pub checkpoints: Vec<Checkpoint>,
+    #[serde(default)]
+    pub current_step_index: Option<usize>,
 }
 
 impl Transaction {
@@ -85,11 +87,34 @@ impl Transaction {
             created_at: Utc::now(),
             status: TransactionStatus::Active,
             checkpoints: Vec::new(),
+            current_step_index: None,
         }
     }
 
     pub fn current_step(&self) -> usize {
         self.checkpoints.len()
+    }
+
+    pub fn active_step(&self) -> usize {
+        self.current_step_index.unwrap_or_else(|| {
+            self.checkpoints.last().map(|c| c.step_index).unwrap_or(0)
+        })
+    }
+
+    pub fn active_checkpoint(&self) -> Option<&Checkpoint> {
+        let step = self.active_step();
+        self.checkpoints
+            .iter()
+            .find(|c| c.step_index == step)
+            .or_else(|| self.checkpoints.last())
+    }
+
+    pub fn next_step_index(&self) -> usize {
+        if self.checkpoints.is_empty() {
+            0
+        } else {
+            self.checkpoints.iter().map(|c| c.step_index).max().unwrap_or(0) + 1
+        }
     }
 
     pub fn latest_checkpoint(&self) -> Option<&Checkpoint> {
