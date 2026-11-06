@@ -1,18 +1,31 @@
 use clap::{Parser, Subcommand};
+use std::io::{stdout, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 use savepoint_core::ChangeKind;
 use savepoint_fs::ShadowEngine;
+use savepoint_pty::{PtySupervisor, RawTerminalGuard, SupervisorEvent};
 
 #[derive(Parser)]
-#[command(name = "savepoint", aliases = ["sp"], author, version = "0.1.0", about = "The ACID Transaction & Time-Travel Runtime for AI Agents")]
-struct Cli {
+#[command(
+    name = "savepoint",
+    author,
+    version = "0.1.0",
+    about = "The ACID Transaction & Time-Travel Runtime for AI Agents"
+)]
+pub struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    pub command: Commands,
 }
 
 #[derive(Subcommand)]
-enum Commands {
+pub enum Commands {
+    /// Wrap and run an interactive CLI agent under transaction supervision
+    Run {
+        /// Command to run (e.g. claude, aider, bash)
+        #[arg(required = true, trailing_var_arg = true)]
+        command: Vec<String>,
+    },
     /// Start a new ACID transaction for the current workspace
     Begin {
         #[arg(short, long, default_value = ".")]
@@ -49,10 +62,70 @@ enum Commands {
     },
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn run_cli() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Run { command } => {
+            let cwd = std::env::current_dir()?;
+            println!("\x1b[36m⚡ [Savepoint]\x1b[0m Starting transactional session for \x1b[1m{:?}\x1b[0m", command);
+            let mut tx = ShadowEngine::begin_transaction(&cwd)?;
+            println!("\x1b[32m✔ [Savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m active.", tx.id);
+            println!("\x1b[90m  Hotkeys: [Ctrl+S] Save Checkpoint | [Ctrl+R] Rewind Time-Travel\x1b[0m\r\n");
+
+            let program = &command[0];
+            let args: Vec<&str> = command.iter().skip(1).map(|s| s.as_str()).collect();
+
+            // Enter raw terminal mode
+            let guard = RawTerminalGuard::new().ok();
+
+            let supervisor = PtySupervisor::spawn(program, &args, Some(&cwd))?;
+
+            while supervisor.is_running() {
+                if let Ok(event) = supervisor.events_rx.recv() {
+                    match event {
+                        SupervisorEvent::CheckpointRequested => {
+                            let start = Instant::now();
+                            if let Ok(cp) = ShadowEngine::checkpoint(&mut tx, Some("Manual (Ctrl+S)"), None) {
+                                print!(
+                                    "\r\n\x1b[32m[Savepoint] Checkpoint #{} saved in {:?} ({} deltas)\x1b[0m\r\n",
+                                    cp.step_index,
+                                    start.elapsed(),
+                                    cp.deltas.len()
+                                );
+                                let _ = stdout().flush();
+                            }
+                        }
+                        SupervisorEvent::RewindRequested => {
+                            // If there are checkpoints to rewind to:
+                            let cur_step = tx.current_step();
+                            if cur_step > 1 {
+                                let target_step = cur_step - 2; // Rewind to previous turn
+                                let start = Instant::now();
+                                if ShadowEngine::rewind(&mut tx, target_step).is_ok() {
+                                    print!(
+                                        "\r\n\x1b[33m[Savepoint] ⏪ Rewound workspace to Step #{} in {:?}!\x1b[0m\r\n",
+                                        target_step,
+                                        start.elapsed()
+                                    );
+                                    let _ = stdout().flush();
+                                }
+                            } else {
+                                print!("\r\n\x1b[33m[Savepoint] Already at baseline step #0. Nothing to rewind.\x1b[0m\r\n");
+                                let _ = stdout().flush();
+                            }
+                        }
+                        SupervisorEvent::ChildExited(code) => {
+                            drop(guard);
+                            println!("\r\n\x1b[36m⚡ [Savepoint]\x1b[0m Child process exited with status {}.", code);
+                            let _ = ShadowEngine::commit(&mut tx);
+                            println!("\x1b[32m✔ [Savepoint]\x1b[0m Transaction {} committed.\x1b[0m", tx.id);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         Commands::Begin { path } => {
             let start = Instant::now();
             let tx = ShadowEngine::begin_transaction(&path)?;

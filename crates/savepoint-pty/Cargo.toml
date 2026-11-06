@@ -1,0 +1,15 @@
+[package]
+name = "savepoint-pty"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+savepoint-core = { path = "../savepoint-core" }
+savepoint-fs = { path = "../savepoint-fs" }
+portable-pty.workspace = true
+crossterm.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

@@ -5,17 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "savepoint"
-path = "src/main.rs"
-
-[[bin]]
-name = "sp"
-path = "src/main.rs"
-
 [dependencies]
 savepoint-core = { path = "../savepoint-core" }
 savepoint-fs = { path = "../savepoint-fs" }
+savepoint-pty = { path = "../savepoint-pty" }
+crossterm.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
