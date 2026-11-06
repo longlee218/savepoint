@@ -5,6 +5,7 @@ use std::time::Instant;
 use savepoint_core::ChangeKind;
 use savepoint_fs::ShadowEngine;
 use savepoint_pty::{PtySupervisor, RawTerminalGuard, SupervisorEvent};
+use savepoint_tui::{run_timeline, TimelineAction};
 
 #[derive(Parser)]
 #[command(
@@ -25,6 +26,12 @@ pub enum Commands {
         /// Command to run (e.g. claude, aider, bash)
         #[arg(required = true, trailing_var_arg = true)]
         command: Vec<String>,
+    },
+    /// Open the interactive TUI timeline to inspect and rewind steps
+    #[command(alias = "ui")]
+    Timeline {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
     },
     /// Start a new ACID transaction for the current workspace
     Begin {
@@ -71,13 +78,13 @@ pub fn run_cli() -> anyhow::Result<()> {
             println!("\x1b[36m⚡ [Savepoint]\x1b[0m Starting transactional session for \x1b[1m{:?}\x1b[0m", command);
             let mut tx = ShadowEngine::begin_transaction(&cwd)?;
             println!("\x1b[32m✔ [Savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m active.", tx.id);
-            println!("\x1b[90m  Hotkeys: [Ctrl+S] Save Checkpoint | [Ctrl+R] Rewind Time-Travel\x1b[0m\r\n");
+            println!("\x1b[90m  Hotkeys: [Ctrl+S] Quick Save | [Ctrl+R] Open TUI Timeline\x1b[0m\r\n");
 
             let program = &command[0];
             let args: Vec<&str> = command.iter().skip(1).map(|s| s.as_str()).collect();
 
             // Enter raw terminal mode
-            let guard = RawTerminalGuard::new().ok();
+            let mut guard = RawTerminalGuard::new().ok();
 
             let supervisor = PtySupervisor::spawn(program, &args, Some(&cwd))?;
 
@@ -97,32 +104,68 @@ pub fn run_cli() -> anyhow::Result<()> {
                             }
                         }
                         SupervisorEvent::RewindRequested => {
-                            // If there are checkpoints to rewind to:
-                            let cur_step = tx.current_step();
-                            if cur_step > 1 {
-                                let target_step = cur_step - 2; // Rewind to previous turn
-                                let start = Instant::now();
-                                if ShadowEngine::rewind(&mut tx, target_step).is_ok() {
-                                    print!(
-                                        "\r\n\x1b[33m[Savepoint] ⏪ Rewound workspace to Step #{} in {:?}!\x1b[0m\r\n",
-                                        target_step,
-                                        start.elapsed()
-                                    );
-                                    let _ = stdout().flush();
+                            // Drop raw terminal mode so Ratatui TUI takes over smoothly
+                            drop(guard.take());
+
+                            // Launch the interactive TUI timeline!
+                            if let Ok(action) = run_timeline(tx.clone()) {
+                                match action {
+                                    TimelineAction::Rewind(target_step) => {
+                                        let start = Instant::now();
+                                        if ShadowEngine::rewind(&mut tx, target_step).is_ok() {
+                                            println!(
+                                                "\r\n\x1b[33m[Savepoint] ⏪ Rewound workspace to Step #{} in {:?}!\x1b[0m\r\n",
+                                                target_step,
+                                                start.elapsed()
+                                            );
+                                        }
+                                    }
+                                    TimelineAction::Commit => {
+                                        let _ = ShadowEngine::commit(&mut tx);
+                                        println!("\r\n\x1b[32m[Savepoint] ✅ Transaction committed via TUI.\x1b[0m\r\n");
+                                    }
+                                    TimelineAction::Cancel => {
+                                        // User pressed Esc/q to dismiss TUI
+                                    }
                                 }
-                            } else {
-                                print!("\r\n\x1b[33m[Savepoint] Already at baseline step #0. Nothing to rewind.\x1b[0m\r\n");
-                                let _ = stdout().flush();
                             }
+
+                            // Re-enter raw terminal mode for child process
+                            guard = RawTerminalGuard::new().ok();
                         }
                         SupervisorEvent::ChildExited(code) => {
-                            drop(guard);
+                            drop(guard.take());
                             println!("\r\n\x1b[36m⚡ [Savepoint]\x1b[0m Child process exited with status {}.", code);
                             let _ = ShadowEngine::commit(&mut tx);
                             println!("\x1b[32m✔ [Savepoint]\x1b[0m Transaction {} committed.\x1b[0m", tx.id);
                             break;
                         }
                     }
+                }
+            }
+        }
+        Commands::Timeline { path } => {
+            let mut tx = match ShadowEngine::load_active_transaction(&path)? {
+                Some(tx) => tx,
+                None => {
+                    eprintln!("\x1b[31m✖ No active Savepoint transaction found in {:?}. Run `sp begin` or `sp run` first.\x1b[0m", path);
+                    return Ok(());
+                }
+            };
+
+            let action = run_timeline(tx.clone())?;
+            match action {
+                TimelineAction::Rewind(step) => {
+                    let start = Instant::now();
+                    ShadowEngine::rewind(&mut tx, step)?;
+                    println!("\x1b[32m✔ [Savepoint]\x1b[0m ⏪ Rewound to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", step, start.elapsed());
+                }
+                TimelineAction::Commit => {
+                    ShadowEngine::commit(&mut tx)?;
+                    println!("\x1b[32m✔ [Savepoint]\x1b[0m ✅ Transaction \x1b[1m{}\x1b[0m committed.\x1b[0m", tx.id);
+                }
+                TimelineAction::Cancel => {
+                    println!("TUI dismissed.");
                 }
             }
         }

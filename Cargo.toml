@@ -3,6 +3,7 @@ members = [
     "crates/savepoint-core",
     "crates/savepoint-fs",
     "crates/savepoint-pty",
+    "crates/savepoint-tui",
     "crates/savepoint-cli",
 ]
 resolver = "2"
@@ -31,3 +32,4 @@ walkdir = "2.5"
 sha2 = "0.10"
 portable-pty = "0.8"
 crossterm = "0.28"
+ratatui = "0.28"

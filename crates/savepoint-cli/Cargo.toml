@@ -9,6 +9,7 @@ license.workspace = true
 savepoint-core = { path = "../savepoint-core" }
 savepoint-fs = { path = "../savepoint-fs" }
 savepoint-pty = { path = "../savepoint-pty" }
+savepoint-tui = { path = "../savepoint-tui" }
 crossterm.workspace = true
 clap.workspace = true
 anyhow.workspace = true
