@@ -84,7 +84,7 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum HookTarget {
-    /// Install /undo, /save, and /timeline slash commands into Claude Code (~/.claude/commands/)
+    /// Install namespaced /sp:save, /sp:undo, /sp:timeline, /sp:diff, /sp:status slash commands into Claude Code (~/.claude/commands/)
     Claude,
 }
 
@@ -145,32 +145,53 @@ pub fn run_cli() -> anyhow::Result<()> {
             HookTarget::Claude => {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
                 let cmd_dir = PathBuf::from(home).join(".claude").join("commands");
-                fs::create_dir_all(&cmd_dir)?;
+                let sp_subdir = cmd_dir.join("sp");
+                fs::create_dir_all(&sp_subdir)?;
 
-                // 1. /undo command
-                fs::write(
-                    cmd_dir.join("undo.md"),
-                    "---\ndescription: Tua ngược workspace về điểm mốc Savepoint trước đó\n---\n!sp undo\n",
-                )?;
+                // Remove legacy un-namespaced commands if present
+                let _ = fs::remove_file(cmd_dir.join("undo.md"));
+                let _ = fs::remove_file(cmd_dir.join("save.md"));
+                let _ = fs::remove_file(cmd_dir.join("timeline.md"));
 
-                // 2. /save command
-                fs::write(
-                    cmd_dir.join("save.md"),
-                    "---\ndescription: Lưu lại điểm mốc code hiện tại vào Savepoint\n---\n!sp save -m \"$ARGUMENTS\"\n",
-                )?;
+                let commands = vec![
+                    (
+                        "save",
+                        "---\ndescription: [Savepoint] Lưu lại điểm mốc code an toàn (Checkpoint)\n---\n!sp save -m \"$ARGUMENTS\"\n",
+                    ),
+                    (
+                        "undo",
+                        "---\ndescription: [Savepoint] Hoàn tác nhanh về điểm mốc an toàn gần nhất\n---\n!sp undo\n",
+                    ),
+                    (
+                        "timeline",
+                        "---\ndescription: [Savepoint] Mở giao diện Time Machine trực quan để xem lịch sử và tua lại\n---\n!sp ui\n",
+                    ),
+                    (
+                        "diff",
+                        "---\ndescription: [Savepoint] Xem các thay đổi trực tiếp (blast radius) chưa lưu mốc\n---\n!sp diff\n",
+                    ),
+                    (
+                        "status",
+                        "---\ndescription: [Savepoint] Xem trạng thái phiên giao dịch đang hoạt động\n---\n!sp status\n",
+                    ),
+                ];
 
-                // 3. /timeline command
-                fs::write(
-                    cmd_dir.join("timeline.md"),
-                    "---\ndescription: Mở giao diện Savepoint Time Machine đồ họa\n---\n!sp ui\n",
-                )?;
+                for (name, content) in &commands {
+                    // 1. ~/.claude/commands/sp/<name>.md (Claude Code native namespacing /sp:<name>)
+                    fs::write(sp_subdir.join(format!("{}.md", name)), content)?;
+                    // 2. ~/.claude/commands/sp:<name>.md (fallback compatibility)
+                    fs::write(cmd_dir.join(format!("sp:{}.md", name)), content)?;
+                }
 
-                println!("\x1b[32m✔ [Savepoint]\x1b[0m Successfully installed Claude Code slash commands!");
+                println!("\x1b[32m✔ [Savepoint]\x1b[0m Successfully installed Claude Code namespaced slash commands!");
                 println!("  Location : {:?}", cmd_dir);
+                println!("  Prefix   : \x1b[33msp:*\x1b[0m (isolated namespace, không đè command khác)");
                 println!("  Commands installed:");
-                println!("    \x1b[36m/undo\x1b[0m     -> Reverts workspace to previous checkpoint");
-                println!("    \x1b[36m/save\x1b[0m     -> Creates a new checkpoint");
-                println!("    \x1b[36m/timeline\x1b[0m -> Opens interactive Time Machine");
+                println!("    \x1b[36m/sp:save [ghi chú]\x1b[0m -> Lưu điểm mốc an toàn (Checkpoint)");
+                println!("    \x1b[36m/sp:undo\x1b[0m           -> Hoàn tác nhanh về mốc trước đó");
+                println!("    \x1b[36m/sp:timeline\x1b[0m       -> Mở Time Machine TUI trực quan");
+                println!("    \x1b[36m/sp:diff\x1b[0m           -> Xem các thay đổi trực tiếp chưa lưu");
+                println!("    \x1b[36m/sp:status\x1b[0m         -> Xem trạng thái phiên hiện tại");
             }
         },
         Commands::Run { command } => {
@@ -178,7 +199,8 @@ pub fn run_cli() -> anyhow::Result<()> {
             println!("\x1b[36m⚡ [Savepoint]\x1b[0m Starting transactional session for \x1b[1m{:?}\x1b[0m", command);
             let mut tx = ShadowEngine::begin_transaction(&cwd)?;
             println!("\x1b[32m✔ [Savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m active.", tx.id);
-            println!("\x1b[90m  Hotkeys: [Ctrl+S] Quick Save | [Ctrl+R] Open TUI Timeline\x1b[0m\r\n");
+            println!("\x1b[90m  Hotkeys: [Ctrl+S] Quick Save | [Ctrl+R] Open TUI Timeline\x1b[0m");
+            println!("\x1b[90m  Claude Slash Commands: /sp:save | /sp:undo | /sp:timeline | /sp:diff\x1b[0m\r\n");
 
             let program = &command[0];
             let args: Vec<&str> = command.iter().skip(1).map(|s| s.as_str()).collect();
