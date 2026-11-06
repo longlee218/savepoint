@@ -43,19 +43,23 @@ In the era of autonomous agents, AI writes and executes code directly in your de
 ## Quickstart
 
 ```bash
-# 1. Start a transaction in your project
+# 1. Wrap your AI agent inside an interactive session:
+$ sp run claude
+# Or aider:
+$ sp run aider
+
+# In-session Hotkeys:
+# [Ctrl+S] Quick Save Checkpoint (takes 0.5ms)
+# [Ctrl+R] Open Interactive TUI Timeline
+
+# 2. Or inspect timeline & rewind anytime:
+$ sp timeline   # (alias: sp ui)
+
+# 3. Direct CLI commands:
 $ sp begin
-
-# 2. Modify code or let your AI Agent run
-$ sp checkpoint -m "Turn 1: Refactor auth to JWT"
-
-# 3. View timeline and file changes
+$ sp checkpoint -m "Refactor auth"
 $ sp status
-
-# 4. Rewind if something breaks
 $ sp rewind --to 1
-
-# 5. Commit when satisfied
 $ sp commit
 ```
 
