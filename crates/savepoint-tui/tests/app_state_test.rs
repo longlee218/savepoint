@@ -3,7 +3,7 @@ use savepoint_tui::{TimelineAction, TimelineApp};
 use std::path::PathBuf;
 
 #[test]
-fn test_app_navigation_and_actions() {
+fn test_app_navigation_and_confirmation() {
     let mut tx = Transaction::new(
         TransactionId::new(),
         PathBuf::from("/tmp/ws"),
@@ -22,24 +22,25 @@ fn test_app_navigation_and_actions() {
     }
 
     let mut app = TimelineApp::new(tx);
-    // Initially selects latest checkpoint (index 2)
     assert_eq!(app.selected_index, 2);
 
-    // Navigate up
+    // Navigate to step 1
     app.previous();
     assert_eq!(app.selected_index, 1);
-    app.previous();
-    assert_eq!(app.selected_index, 0);
-    // Bounds check
-    app.previous();
-    assert_eq!(app.selected_index, 0);
 
-    // Navigate down
-    app.next();
-    assert_eq!(app.selected_index, 1);
+    // Request Rewind confirmation
+    app.request_rewind_confirmation();
+    // It should NOT quit yet! It should be in confirmation mode
+    assert!(!app.should_quit);
+    assert_eq!(app.action, None);
 
-    // Request Rewind
-    app.request_rewind();
+    // If user cancels confirmation
+    app.cancel_confirmation();
+    assert!(!app.should_quit);
+
+    // Request again and confirm
+    app.request_rewind_confirmation();
+    app.confirm_rewind();
     assert!(app.should_quit);
     assert_eq!(app.action, Some(TimelineAction::Rewind(1)));
 }

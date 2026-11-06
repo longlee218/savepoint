@@ -7,7 +7,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::stdout;
 use std::time::Duration;
 use savepoint_core::Transaction;
-use crate::app::{TimelineAction, TimelineApp};
+use crate::app::{TimelineAction, TimelineApp, ViewMode};
 use crate::ui::render_ui;
 
 /// Runs the interactive TUI timeline for the provided transaction.
@@ -42,13 +42,33 @@ fn run_loop<B: ratatui::backend::Backend>(
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Up | KeyCode::Char('k') => app.previous(),
-                        KeyCode::Down | KeyCode::Char('j') => app.next(),
-                        KeyCode::Enter => app.request_rewind(),
-                        KeyCode::Char('c') => app.request_commit(),
-                        KeyCode::Char('q') | KeyCode::Esc => app.cancel(),
-                        _ => {}
+                    match app.mode {
+                        ViewMode::ConfirmingRewind(_) => {
+                            // In confirmation modal
+                            match key.code {
+                                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                                    app.confirm_rewind();
+                                }
+                                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => {
+                                    app.cancel_confirmation();
+                                }
+                                _ => {}
+                            }
+                        }
+                        ViewMode::Normal => {
+                            // Normal browsing
+                            match key.code {
+                                KeyCode::Up | KeyCode::Char('k') => app.previous(),
+                                KeyCode::Down | KeyCode::Char('j') => app.next(),
+                                KeyCode::Char('r') | KeyCode::Enter => {
+                                    // Open confirmation dialog instead of blindly rewinding!
+                                    app.request_rewind_confirmation();
+                                }
+                                KeyCode::Char('c') => app.request_commit(),
+                                KeyCode::Char('q') | KeyCode::Esc => app.cancel(),
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }

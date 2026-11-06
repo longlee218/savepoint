@@ -2,11 +2,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 use savepoint_core::ChangeKind;
-use crate::app::TimelineApp;
+use crate::app::{TimelineApp, ViewMode};
 
 pub fn render_ui(f: &mut Frame, app: &TimelineApp) {
     let chunks = Layout::default()
@@ -21,6 +21,11 @@ pub fn render_ui(f: &mut Frame, app: &TimelineApp) {
     render_header(f, chunks[0], app);
     render_body(f, chunks[1], app);
     render_footer(f, chunks[2]);
+
+    // If confirmation modal is open, render it centered on top
+    if let ViewMode::ConfirmingRewind(step) = app.mode {
+        render_confirm_modal(f, step);
+    }
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &TimelineApp) {
@@ -61,7 +66,6 @@ fn render_steps_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
     let mut items = Vec::new();
     let total_checkpoints = app.tx.checkpoints.len();
 
-    // Render from newest (top) to oldest (bottom) or step order
     for (idx, cp) in app.tx.checkpoints.iter().enumerate() {
         let is_selected = idx == app.selected_index;
         let is_latest = idx == total_checkpoints.saturating_sub(1);
@@ -164,9 +168,11 @@ fn render_details(f: &mut Frame, area: Rect, app: &TimelineApp) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("💡 Bấm phím ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[r]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" hoặc "),
             Span::styled("[Enter]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::styled(
-                format!(" để đưa toàn bộ dự án quay về Bước #{}", cp.step_index),
+                format!(" để mở xác nhận quay về Bước #{}", cp.step_index),
                 Style::default().fg(Color::Green),
             ),
         ]));
@@ -186,13 +192,54 @@ fn render_details(f: &mut Frame, area: Rect, app: &TimelineApp) {
     f.render_widget(p, area);
 }
 
+fn render_confirm_modal(f: &mut Frame, step: usize) {
+    let area = centered_rect(65, 30, f.area());
+    f.render_widget(Clear, area); // Xóa sạch nền bên dưới
+
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "  ⚠️  XÁC NHẬN TUA NGƯỢC THỜI GIAN (REWIND)  ",
+                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Bạn có chắc chắn muốn đưa toàn bộ dự án quay về "),
+            Span::styled(format!("Bước #{}", step), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("?"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  (Lưu ý: Mọi thay đổi do AI làm sau bước này sẽ bị hủy bỏ!)",
+            Style::default().fg(Color::Red),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  👉 [y / Enter] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("Đồng ý hoàn nguyên        "),
+            Span::styled("  [n / Esc] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw("Hủy bỏ"),
+        ]),
+    ];
+
+    let block = Block::default()
+        .title(" Cảnh Báo An Toàn ")
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::Yellow));
+
+    let p = Paragraph::new(text).block(block);
+    f.render_widget(p, area);
+}
+
 fn render_footer(f: &mut Frame, area: Rect) {
     let footer_text = Line::from(vec![
         Span::styled(" [↑ / ↓] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw("Chọn bước   "),
-        Span::styled(" [Enter] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        Span::raw("Quay về bước này   "),
-        Span::styled(" [c] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(" [r / Enter] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::raw("Tua về bước này   "),
+        Span::styled(" [c] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
         Span::raw("Chốt lưu (Commit)   "),
         Span::styled(" [q / Esc] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         Span::raw("Đóng menu"),
@@ -202,4 +249,25 @@ fn render_footer(f: &mut Frame, area: Rect) {
         .block(Block::default().borders(Borders::ALL).style(Style::default().fg(Color::DarkGray)));
 
     f.render_widget(footer, area);
+}
+
+/// Helper to center a rectangular area in the terminal
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
