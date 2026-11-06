@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::fs;
 use std::io::{stdout, Write};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -38,8 +39,15 @@ pub enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Quickly rewind to the previous checkpoint (Undo 1 step)
+    #[command(alias = "rollback")]
+    Undo {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
     /// Save a checkpoint after an agent turn or manual change
-    Checkpoint {
+    #[command(alias = "checkpoint")]
+    Save {
         #[arg(short, long)]
         message: Option<String>,
         #[arg(short, long, default_value = ".")]
@@ -67,12 +75,104 @@ pub enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Install integrations & hooks (e.g. Claude Code slash commands)
+    Hook {
+        #[command(subcommand)]
+        target: HookTarget,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum HookTarget {
+    /// Install /undo, /save, and /timeline slash commands into Claude Code (~/.claude/commands/)
+    Claude,
 }
 
 pub fn run_cli() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Undo { path } => {
+            let mut tx = match ShadowEngine::load_active_transaction(&path)? {
+                Some(tx) => tx,
+                None => {
+                    eprintln!("\x1b[31m✖ No active Savepoint transaction found in {:?}. Run `sp begin` or `sp run` first.\x1b[0m", path);
+                    return Ok(());
+                }
+            };
+
+            let start = Instant::now();
+            match ShadowEngine::rewind_previous(&mut tx)? {
+                Some(target_step) => {
+                    println!(
+                        "\x1b[32m✔ [Savepoint]\x1b[0m ⏪ Rewound to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m",
+                        target_step,
+                        start.elapsed()
+                    );
+                }
+                None => {
+                    println!("\x1b[33m[Savepoint] Already at baseline step #0. Nothing to rewind.\x1b[0m");
+                }
+            }
+        }
+        Commands::Save { message, path } => {
+            let mut tx = match ShadowEngine::load_active_transaction(&path)? {
+                Some(tx) => tx,
+                None => {
+                    eprintln!("\x1b[31m✖ No active Savepoint transaction found in {:?}. Run `sp begin` first.\x1b[0m", path);
+                    return Ok(());
+                }
+            };
+
+            let start = Instant::now();
+            let cp = ShadowEngine::checkpoint(&mut tx, message.as_deref(), None)?;
+            let elapsed = start.elapsed();
+
+            println!("\x1b[32m✔ [Savepoint]\x1b[0m Checkpoint \x1b[1m#{}\x1b[0m saved in \x1b[36m{:?}\x1b[0m", cp.step_index, elapsed);
+            if let Some(msg) = cp.prompt {
+                println!("  Prompt    : {}", msg);
+            }
+            println!("  Changes   : {} files affected", cp.deltas.len());
+            for delta in &cp.deltas {
+                match delta.kind {
+                    ChangeKind::Created => println!("    \x1b[32m+ {}\x1b[0m", delta.relative_path.display()),
+                    ChangeKind::Modified => println!("    \x1b[33m~ {}\x1b[0m", delta.relative_path.display()),
+                    ChangeKind::Deleted => println!("    \x1b[31m- {}\x1b[0m", delta.relative_path.display()),
+                }
+            }
+        }
+        Commands::Hook { target } => match target {
+            HookTarget::Claude => {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+                let cmd_dir = PathBuf::from(home).join(".claude").join("commands");
+                fs::create_dir_all(&cmd_dir)?;
+
+                // 1. /undo command
+                fs::write(
+                    cmd_dir.join("undo.md"),
+                    "---\ndescription: Tua ngược workspace về điểm mốc Savepoint trước đó\n---\n!sp undo\n",
+                )?;
+
+                // 2. /save command
+                fs::write(
+                    cmd_dir.join("save.md"),
+                    "---\ndescription: Lưu lại điểm mốc code hiện tại vào Savepoint\n---\n!sp save -m \"$ARGUMENTS\"\n",
+                )?;
+
+                // 3. /timeline command
+                fs::write(
+                    cmd_dir.join("timeline.md"),
+                    "---\ndescription: Mở giao diện Savepoint Time Machine đồ họa\n---\n!sp ui\n",
+                )?;
+
+                println!("\x1b[32m✔ [Savepoint]\x1b[0m Successfully installed Claude Code slash commands!");
+                println!("  Location : {:?}", cmd_dir);
+                println!("  Commands installed:");
+                println!("    \x1b[36m/undo\x1b[0m     -> Reverts workspace to previous checkpoint");
+                println!("    \x1b[36m/save\x1b[0m     -> Creates a new checkpoint");
+                println!("    \x1b[36m/timeline\x1b[0m -> Opens interactive Time Machine");
+            }
+        },
         Commands::Run { command } => {
             let cwd = std::env::current_dir()?;
             println!("\x1b[36m⚡ [Savepoint]\x1b[0m Starting transactional session for \x1b[1m{:?}\x1b[0m", command);
@@ -124,9 +224,7 @@ pub fn run_cli() -> anyhow::Result<()> {
                                         let _ = ShadowEngine::commit(&mut tx);
                                         println!("\r\n\x1b[32m[Savepoint] ✅ Transaction committed via TUI.\x1b[0m\r\n");
                                     }
-                                    TimelineAction::Cancel => {
-                                        // User pressed Esc/q to dismiss TUI
-                                    }
+                                    TimelineAction::Cancel => {}
                                 }
                             }
 
@@ -177,32 +275,6 @@ pub fn run_cli() -> anyhow::Result<()> {
             println!("  Workspace : {:?}", tx.workspace_root);
             println!("  Storage   : {:?}", tx.shadow_root);
             println!("  Baseline  : Step #0 captured via APFS Copy-on-Write.");
-        }
-        Commands::Checkpoint { message, path } => {
-            let mut tx = match ShadowEngine::load_active_transaction(&path)? {
-                Some(tx) => tx,
-                None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found in {:?}. Run `sp begin` first.\x1b[0m", path);
-                    return Ok(());
-                }
-            };
-
-            let start = Instant::now();
-            let cp = ShadowEngine::checkpoint(&mut tx, message.as_deref(), None)?;
-            let elapsed = start.elapsed();
-
-            println!("\x1b[32m✔ [Savepoint]\x1b[0m Checkpoint \x1b[1m#{}\x1b[0m saved in \x1b[36m{:?}\x1b[0m", cp.step_index, elapsed);
-            if let Some(msg) = cp.prompt {
-                println!("  Prompt    : {}", msg);
-            }
-            println!("  Changes   : {} files affected", cp.deltas.len());
-            for delta in &cp.deltas {
-                match delta.kind {
-                    ChangeKind::Created => println!("    \x1b[32m+ {}\x1b[0m", delta.relative_path.display()),
-                    ChangeKind::Modified => println!("    \x1b[33m~ {}\x1b[0m", delta.relative_path.display()),
-                    ChangeKind::Deleted => println!("    \x1b[31m- {}\x1b[0m", delta.relative_path.display()),
-                }
-            }
         }
         Commands::Status { path } => {
             let tx = match ShadowEngine::load_active_transaction(&path)? {

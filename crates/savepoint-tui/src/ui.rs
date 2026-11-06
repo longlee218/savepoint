@@ -13,8 +13,8 @@ pub fn render_ui(f: &mut Frame, app: &TimelineApp) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header
-            Constraint::Min(8),    // Body (Left: Timeline, Right: Inspector)
-            Constraint::Length(3), // Footer
+            Constraint::Min(10),   // Main Body (Left: Steps list, Right: Step Details)
+            Constraint::Length(3), // Action bar
         ])
         .split(f.area());
 
@@ -24,58 +24,79 @@ pub fn render_ui(f: &mut Frame, app: &TimelineApp) {
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &TimelineApp) {
-    let header_text = vec![
-        Line::from(vec![
-            Span::styled(" ⚡ SAVEPOINT ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw(" // Interactive Time-Travel & ACID Runtime   "),
-            Span::styled("Tx: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(app.tx.id.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(" | Status: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{:?}", app.tx.status), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        ]),
-    ];
+    let ws_name = app
+        .tx
+        .workspace_root
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Workspace".to_string());
 
-    let header_widget = Paragraph::new(header_text)
-        .block(Block::default().borders(Borders::ALL).style(Style::default().fg(Color::Cyan)));
+    let header_line = Line::from(vec![
+        Span::styled(" ⏱ TIME MACHINE ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(format!("  Dự án: {}  •  Mã phiên: {}  ", ws_name, app.tx.id)),
+    ]);
 
-    f.render_widget(header_widget, area);
+    let p = Paragraph::new(header_line).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Color::Cyan)),
+    );
+    f.render_widget(p, area);
 }
 
 fn render_body(f: &mut Frame, area: Rect, app: &TimelineApp) {
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(42), // Timeline Checkpoint List
-            Constraint::Percentage(58), // Inspector & File Deltas
+            Constraint::Percentage(45), // Danh sách các mốc
+            Constraint::Percentage(55), // Chi tiết mốc đang chọn
         ])
         .split(area);
 
-    render_timeline_list(f, body_chunks[0], app);
-    render_inspector(f, body_chunks[1], app);
+    render_steps_list(f, body_chunks[0], app);
+    render_details(f, body_chunks[1], app);
 }
 
-fn render_timeline_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
+fn render_steps_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
     let mut items = Vec::new();
+    let total_checkpoints = app.tx.checkpoints.len();
 
+    // Render from newest (top) to oldest (bottom) or step order
     for (idx, cp) in app.tx.checkpoints.iter().enumerate() {
         let is_selected = idx == app.selected_index;
-        let prefix = if is_selected { "▶ " } else { "  " };
+        let is_latest = idx == total_checkpoints.saturating_sub(1);
 
-        let step_label = format!("{}Step #{} ", prefix, cp.step_index);
-        let prompt_desc = cp.prompt.as_deref().unwrap_or("Baseline snapshot");
+        let icon = if is_selected {
+            "👉 "
+        } else if is_latest {
+            "● "
+        } else {
+            "○ "
+        };
+
+        let badge = if is_latest {
+            " [Đang ở đây] "
+        } else {
+            " "
+        };
+
+        let step_title = format!("{}Bước #{}{}", icon, cp.step_index, badge);
+        let prompt_desc = cp.prompt.as_deref().unwrap_or("Mốc khởi đầu");
 
         let style = if is_selected {
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Cyan)
+                .bg(Color::Green)
                 .add_modifier(Modifier::BOLD)
+        } else if is_latest {
+            Style::default().fg(Color::Cyan)
         } else {
             Style::default().fg(Color::White)
         };
 
         let line = Line::from(vec![
-            Span::styled(step_label, style.add_modifier(Modifier::BOLD)),
-            Span::styled(format!("({} changes) ", cp.deltas.len()), Style::default().fg(Color::DarkGray)),
+            Span::styled(step_title, style),
+            Span::styled(format!("({} files) ", cp.deltas.len()), Style::default().fg(Color::DarkGray)),
             Span::styled(prompt_desc, style),
         ]);
 
@@ -84,7 +105,7 @@ fn render_timeline_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
 
     let list = List::new(items).block(
         Block::default()
-            .title(" ⏱ Checkpoint Timeline ")
+            .title(" 📜 Lịch Sử Các Bước (Dùng ↑ / ↓ để chọn) ")
             .borders(Borders::ALL)
             .style(Style::default().fg(Color::White)),
     );
@@ -92,68 +113,89 @@ fn render_timeline_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
     f.render_widget(list, area);
 }
 
-fn render_inspector(f: &mut Frame, area: Rect, app: &TimelineApp) {
+fn render_details(f: &mut Frame, area: Rect, app: &TimelineApp) {
     let mut lines = Vec::new();
 
     if let Some(cp) = app.selected_checkpoint() {
         lines.push(Line::from(vec![
-            Span::styled("Selected: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("Checkpoint Step #{}", cp.step_index), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  ({})", cp.timestamp.format("%H:%M:%S UTC")), Style::default().fg(Color::DarkGray)),
+            Span::styled("Mốc thời gian: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("Bước #{} (Lúc {})", cp.step_index, cp.timestamp.format("%H:%M:%S")),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("Prompt: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(cp.prompt.as_deref().unwrap_or("None"), Style::default().fg(Color::Yellow)),
+            Span::styled("Mô tả: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                cp.prompt.as_deref().unwrap_or("Trạng thái ban đầu"),
+                Style::default().fg(Color::Yellow),
+            ),
         ]));
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("File Deltas (Blast Radius):", Style::default().add_modifier(Modifier::UNDERLINED | Modifier::BOLD)),
+            Span::styled(
+                "Các file thay đổi tại bước này:",
+                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            ),
         ]));
 
         if cp.deltas.is_empty() {
-            lines.push(Line::from(Span::styled("  (No file changes in this step - pristine baseline)", Style::default().fg(Color::DarkGray))));
+            lines.push(Line::from(Span::styled(
+                "  (Bước khởi đầu - chưa có file nào bị thay đổi)",
+                Style::default().fg(Color::DarkGray),
+            )));
         } else {
             for delta in &cp.deltas {
-                let (badge, badge_color) = match delta.kind {
-                    ChangeKind::Created => ("+ [Created]", Color::Green),
-                    ChangeKind::Modified => ("~ [Modified]", Color::Yellow),
-                    ChangeKind::Deleted => ("- [Deleted]", Color::Red),
+                let (badge, color, action_text) = match delta.kind {
+                    ChangeKind::Created => ("+ [TẠO MỚI]", Color::Green, "Tạo mới"),
+                    ChangeKind::Modified => ("~ [SỬA ĐỔI]", Color::Yellow, "Sửa nội dung"),
+                    ChangeKind::Deleted => ("- [ĐÃ XÓA]", Color::Red, "Bị xóa mất"),
                 };
 
                 lines.push(Line::from(vec![
-                    Span::styled(format!("  {} ", badge), Style::default().fg(badge_color).add_modifier(Modifier::BOLD)),
-                    Span::raw(delta.relative_path.to_string_lossy().to_string()),
+                    Span::styled(format!("  {} ", badge), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                    Span::raw(format!("{}  ({})", delta.relative_path.display(), action_text)),
                 ]));
             }
         }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("💡 Bấm phím ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Enter]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!(" để đưa toàn bộ dự án quay về Bước #{}", cp.step_index),
+                Style::default().fg(Color::Green),
+            ),
+        ]));
     } else {
-        lines.push(Line::from(Span::raw("No checkpoint selected")));
+        lines.push(Line::from(Span::raw("Chưa chọn bước nào")));
     }
 
-    let inspector = Paragraph::new(lines)
+    let p = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .block(
             Block::default()
-                .title(" 🔍 Step Inspector & Deltas ")
+                .title(" 🔍 Chi Tiết Bước Đang Chọn ")
                 .borders(Borders::ALL)
                 .style(Style::default().fg(Color::White)),
         );
 
-    f.render_widget(inspector, area);
+    f.render_widget(p, area);
 }
 
 fn render_footer(f: &mut Frame, area: Rect) {
     let footer_text = Line::from(vec![
-        Span::styled(" [↑/k / ↓/j] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw("Navigate  "),
+        Span::styled(" [↑ / ↓] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw("Chọn bước   "),
         Span::styled(" [Enter] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        Span::raw("Rewind to Step  "),
+        Span::raw("Quay về bước này   "),
         Span::styled(" [c] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw("Commit  "),
+        Span::raw("Chốt lưu (Commit)   "),
         Span::styled(" [q / Esc] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Span::raw("Cancel/Exit"),
+        Span::raw("Đóng menu"),
     ]);
 
     let footer = Paragraph::new(footer_text)

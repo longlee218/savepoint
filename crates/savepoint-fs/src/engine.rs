@@ -162,6 +162,18 @@ impl ShadowEngine {
         Ok(())
     }
 
+    /// Rewinds one step back (to the previous checkpoint).
+    /// Returns the target step index that was restored, or None if already at baseline.
+    pub fn rewind_previous(tx: &mut Transaction) -> Result<Option<usize>> {
+        if tx.checkpoints.len() <= 1 {
+            return Ok(None);
+        }
+
+        let target_step = tx.checkpoints[tx.checkpoints.len() - 2].step_index;
+        Self::rewind(tx, target_step)?;
+        Ok(Some(target_step))
+    }
+
     /// Commits the active transaction, cementing changes.
     pub fn commit(tx: &mut Transaction) -> Result<()> {
         if tx.status != TransactionStatus::Active {

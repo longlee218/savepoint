@@ -41,7 +41,8 @@ fn test_engine_transaction_lifecycle() {
     assert!(!ws.join("src/utils.rs").exists());
 
     // 5. REWIND to Turn 1!
-    ShadowEngine::rewind(&mut tx, 1).expect("Rewind to Step 1 failed");
+    let rewound_step = ShadowEngine::rewind_previous(&mut tx).expect("Rewind previous failed");
+    assert_eq!(rewound_step, Some(1));
 
     // Verify Turn 1 state is perfectly restored!
     assert_eq!(
