@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::io::{stdout, Write};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use savepoint_core::ChangeKind;
 use savepoint_fs::ShadowEngine;
 use savepoint_pty::{PtySupervisor, RawTerminalGuard, SupervisorEvent};
@@ -189,8 +189,8 @@ pub fn run_cli() -> anyhow::Result<()> {
             let supervisor = PtySupervisor::spawn(program, &args, Some(&cwd))?;
 
             while supervisor.is_running() {
-                if let Ok(event) = supervisor.events_rx.recv() {
-                    match event {
+                match supervisor.events_rx.recv_timeout(Duration::from_millis(1500)) {
+                    Ok(event) => match event {
                         SupervisorEvent::CheckpointRequested => {
                             let start = Instant::now();
                             if let Ok(cp) = ShadowEngine::checkpoint(&mut tx, Some("Manual (Ctrl+S)"), None) {
@@ -207,8 +207,10 @@ pub fn run_cli() -> anyhow::Result<()> {
                             // Drop raw terminal mode so Ratatui TUI takes over smoothly
                             drop(guard.take());
 
+                            let live_deltas = ShadowEngine::compute_live_deltas(&tx).unwrap_or_default();
+
                             // Launch the interactive TUI timeline!
-                            if let Ok(action) = run_timeline(tx.clone()) {
+                            if let Ok(action) = run_timeline(tx.clone(), live_deltas) {
                                 match action {
                                     TimelineAction::Rewind(target_step) => {
                                         let start = Instant::now();
@@ -238,6 +240,21 @@ pub fn run_cli() -> anyhow::Result<()> {
                             println!("\x1b[32m✔ [Savepoint]\x1b[0m Transaction {} committed.\x1b[0m", tx.id);
                             break;
                         }
+                    },
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        // Background Auto-Save: If agent created/modified/deleted files, take an instant APFS snapshot
+                        if let Ok(deltas) = ShadowEngine::compute_live_deltas(&tx) {
+                            if !deltas.is_empty() {
+                                let _ = ShadowEngine::checkpoint(
+                                    &mut tx,
+                                    Some("Tự động lưu: Phát hiện thay đổi trong thư mục"),
+                                    None,
+                                );
+                            }
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        break;
                     }
                 }
             }
@@ -251,7 +268,8 @@ pub fn run_cli() -> anyhow::Result<()> {
                 }
             };
 
-            let action = run_timeline(tx.clone())?;
+            let live_deltas = ShadowEngine::compute_live_deltas(&tx).unwrap_or_default();
+            let action = run_timeline(tx.clone(), live_deltas)?;
             match action {
                 TimelineAction::Rewind(step) => {
                     let start = Instant::now();
@@ -339,17 +357,18 @@ pub fn run_cli() -> anyhow::Result<()> {
                 }
             };
 
-            if let Some(latest) = tx.checkpoints.last() {
-                println!("\x1b[1m=== File Deltas for Checkpoint #{} ===\x1b[0m", latest.step_index);
-                for delta in &latest.deltas {
+            let live_deltas = ShadowEngine::compute_live_deltas(&tx)?;
+            if live_deltas.is_empty() {
+                println!("\x1b[32m✔ Thư mục làm việc sạch sẽ (không có thay đổi so với mốc gần nhất).\x1b[0m");
+            } else {
+                println!("\x1b[1m=== Thay Đổi Trực Tiếp Hiện Tại (Chưa lưu mốc) ===\x1b[0m");
+                for delta in &live_deltas {
                     match delta.kind {
-                        ChangeKind::Created => println!("  \x1b[32m+ [Created]\x1b[0m  {}", delta.relative_path.display()),
-                        ChangeKind::Modified => println!("  \x1b[33m~ [Modified]\x1b[0m {}", delta.relative_path.display()),
-                        ChangeKind::Deleted => println!("  \x1b[31m- [Deleted]\x1b[0m  {}", delta.relative_path.display()),
+                        ChangeKind::Created => println!("  \x1b[32m+ [Tạo mới]  {}\x1b[0m", delta.relative_path.display()),
+                        ChangeKind::Modified => println!("  \x1b[33m~ [Sửa đổi]  {}\x1b[0m", delta.relative_path.display()),
+                        ChangeKind::Deleted => println!("  \x1b[31m- [Đã xóa]   {}\x1b[0m", delta.relative_path.display()),
                     }
                 }
-            } else {
-                println!("No checkpoints recorded yet.");
             }
         }
     }

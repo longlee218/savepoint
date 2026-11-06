@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 use savepoint_core::ChangeKind;
-use crate::app::{TimelineApp, ViewMode};
+use crate::app::{TimelineApp, TimelineRow, ViewMode};
 
 pub fn render_ui(f: &mut Frame, app: &TimelineApp) {
     let chunks = Layout::default()
@@ -64,47 +64,43 @@ fn render_body(f: &mut Frame, area: Rect, app: &TimelineApp) {
 
 fn render_steps_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
     let mut items = Vec::new();
-    let total_checkpoints = app.tx.checkpoints.len();
 
-    for (idx, cp) in app.tx.checkpoints.iter().enumerate() {
+    for (idx, row) in app.rows.iter().enumerate() {
         let is_selected = idx == app.selected_index;
-        let is_latest = idx == total_checkpoints.saturating_sub(1);
+        let icon = if is_selected { "👉 " } else { "   " };
 
-        let icon = if is_selected {
-            "👉 "
-        } else if is_latest {
-            "● "
-        } else {
-            "○ "
-        };
+        match row {
+            TimelineRow::Live { deltas } => {
+                let style = if is_selected {
+                    Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                };
 
-        let badge = if is_latest {
-            " [Đang ở đây] "
-        } else {
-            " "
-        };
+                let line = Line::from(vec![
+                    Span::styled(format!("{}⚡ [HIỆN TẠI - Chưa lưu] ", icon), style),
+                    Span::styled(format!("({} files) ", deltas.len()), Style::default().fg(Color::Red)),
+                ]);
+                items.push(ListItem::new(line));
+            }
+            TimelineRow::Saved(cp) => {
+                let style = if is_selected {
+                    Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
 
-        let step_title = format!("{}Bước #{}{}", icon, cp.step_index, badge);
-        let prompt_desc = cp.prompt.as_deref().unwrap_or("Mốc khởi đầu");
+                let step_title = format!("{}Bước #{} ", icon, cp.step_index);
+                let prompt_desc = cp.prompt.as_deref().unwrap_or("Mốc khởi đầu");
 
-        let style = if is_selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        } else if is_latest {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let line = Line::from(vec![
-            Span::styled(step_title, style),
-            Span::styled(format!("({} files) ", cp.deltas.len()), Style::default().fg(Color::DarkGray)),
-            Span::styled(prompt_desc, style),
-        ]);
-
-        items.push(ListItem::new(line));
+                let line = Line::from(vec![
+                    Span::styled(step_title, style),
+                    Span::styled(format!("({} files) ", cp.deltas.len()), Style::default().fg(Color::DarkGray)),
+                    Span::styled(prompt_desc, style),
+                ]);
+                items.push(ListItem::new(line));
+            }
+        }
     }
 
     let list = List::new(items).block(
@@ -120,38 +116,22 @@ fn render_steps_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
 fn render_details(f: &mut Frame, area: Rect, app: &TimelineApp) {
     let mut lines = Vec::new();
 
-    if let Some(cp) = app.selected_checkpoint() {
-        lines.push(Line::from(vec![
-            Span::styled("Mốc thời gian: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("Bước #{} (Lúc {})", cp.step_index, cp.timestamp.format("%H:%M:%S")),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+    match app.selected_row() {
+        Some(TimelineRow::Live { deltas }) => {
+            lines.push(Line::from(vec![
+                Span::styled("Trạng thái: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Thay đổi trực tiếp trong thư mục (Chưa lưu thành mốc)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]));
 
-        lines.push(Line::from(vec![
-            Span::styled("Mô tả: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                cp.prompt.as_deref().unwrap_or("Trạng thái ban đầu"),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "Các file vừa bị tác động gần đây nhất:",
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                ),
+            ]));
 
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                "Các file thay đổi tại bước này:",
-                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            ),
-        ]));
-
-        if cp.deltas.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  (Bước khởi đầu - chưa có file nào bị thay đổi)",
-                Style::default().fg(Color::DarkGray),
-            )));
-        } else {
-            for delta in &cp.deltas {
+            for delta in deltas {
                 let (badge, color, action_text) = match delta.kind {
                     ChangeKind::Created => ("+ [TẠO MỚI]", Color::Green, "Tạo mới"),
                     ChangeKind::Modified => ("~ [SỬA ĐỔI]", Color::Yellow, "Sửa nội dung"),
@@ -163,21 +143,77 @@ fn render_details(f: &mut Frame, area: Rect, app: &TimelineApp) {
                     Span::raw(format!("{}  ({})", delta.relative_path.display(), action_text)),
                 ]));
             }
-        }
 
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("💡 Bấm phím ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[r]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(" hoặc "),
-            Span::styled("[Enter]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(
-                format!(" để mở xác nhận quay về Bước #{}", cp.step_index),
-                Style::default().fg(Color::Green),
-            ),
-        ]));
-    } else {
-        lines.push(Line::from(Span::raw("Chưa chọn bước nào")));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("💡 Mẹo: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("Để hủy các thay đổi này và quay về mốc trước, hãy bấm phím "),
+                Span::styled("↓", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(" để chọn bước trước đó rồi bấm "),
+                Span::styled("[Enter]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw("!"),
+            ]));
+        }
+        Some(TimelineRow::Saved(cp)) => {
+            lines.push(Line::from(vec![
+                Span::styled("Mốc thời gian: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("Bước #{} (Lúc {})", cp.step_index, cp.timestamp.format("%H:%M:%S")),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+
+            lines.push(Line::from(vec![
+                Span::styled("Mô tả: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    cp.prompt.as_deref().unwrap_or("Trạng thái ban đầu"),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "Các file thay đổi tại bước này:",
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                ),
+            ]));
+
+            if cp.deltas.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  (Bước khởi đầu - mốc an toàn nguyên bản)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for delta in &cp.deltas {
+                    let (badge, color, action_text) = match delta.kind {
+                        ChangeKind::Created => ("+ [TẠO MỚI]", Color::Green, "Tạo mới"),
+                        ChangeKind::Modified => ("~ [SỬA ĐỔI]", Color::Yellow, "Sửa nội dung"),
+                        ChangeKind::Deleted => ("- [ĐÃ XÓA]", Color::Red, "Bị xóa mất"),
+                    };
+
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {} ", badge), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                        Span::raw(format!("{}  ({})", delta.relative_path.display(), action_text)),
+                    ]));
+                }
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("💡 Bấm phím ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[r]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" hoặc "),
+                Span::styled("[Enter]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(" để mở xác nhận quay về Bước #{}", cp.step_index),
+                    Style::default().fg(Color::Green),
+                ),
+            ]));
+        }
+        None => {
+            lines.push(Line::from(Span::raw("Chưa chọn bước nào")));
+        }
     }
 
     let p = Paragraph::new(lines)
@@ -194,7 +230,7 @@ fn render_details(f: &mut Frame, area: Rect, app: &TimelineApp) {
 
 fn render_confirm_modal(f: &mut Frame, step: usize) {
     let area = centered_rect(65, 30, f.area());
-    f.render_widget(Clear, area); // Xóa sạch nền bên dưới
+    f.render_widget(Clear, area);
 
     let text = vec![
         Line::from(""),
@@ -251,7 +287,6 @@ fn render_footer(f: &mut Frame, area: Rect) {
     f.render_widget(footer, area);
 }
 
-/// Helper to center a rectangular area in the terminal
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)

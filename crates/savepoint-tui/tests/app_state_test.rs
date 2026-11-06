@@ -21,11 +21,11 @@ fn test_app_navigation_and_confirmation() {
         });
     }
 
-    let mut app = TimelineApp::new(tx);
-    assert_eq!(app.selected_index, 2);
+    let mut app = TimelineApp::new(tx, Vec::new());
+    assert_eq!(app.selected_index, 0);
 
-    // Navigate to step 1
-    app.previous();
+    // Navigate down to step 1 (row 1)
+    app.next();
     assert_eq!(app.selected_index, 1);
 
     // Request Rewind confirmation

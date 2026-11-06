@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use chrono::Utc;
 use savepoint_core::{
-    ChangeKind, Checkpoint, Result, SavepointError, Transaction, TransactionId, TransactionStatus,
+    ChangeKind, Checkpoint, FileDelta, Result, SavepointError, Transaction, TransactionId, TransactionStatus,
 };
 use crate::clone::clone_tree;
 use crate::diff::compute_deltas;
@@ -172,6 +172,15 @@ impl ShadowEngine {
         let target_step = tx.checkpoints[tx.checkpoints.len() - 2].step_index;
         Self::rewind(tx, target_step)?;
         Ok(Some(target_step))
+    }
+
+    /// Computes differences between the latest saved checkpoint and the current live workspace.
+    pub fn compute_live_deltas(tx: &Transaction) -> Result<Vec<FileDelta>> {
+        let latest_cp = tx.checkpoints.last().ok_or_else(|| {
+            SavepointError::Other("Transaction has no checkpoints".to_string())
+        })?;
+
+        compute_deltas(&latest_cp.snapshot_path, &tx.workspace_root)
     }
 
     /// Commits the active transaction, cementing changes.
