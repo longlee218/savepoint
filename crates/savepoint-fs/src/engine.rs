@@ -1,35 +1,57 @@
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use savepoint_core::{
     ChangeKind, Checkpoint, FileDelta, Result, SavepointError, Transaction, TransactionId, TransactionStatus,
 };
-use crate::clone::clone_tree;
+use crate::clone::{clone_tree, clone_workspace};
 use crate::diff::compute_deltas;
 
 pub struct ShadowEngine;
 
 impl ShadowEngine {
     /// Resolves the storage root for Savepoint data for a specific workspace.
-    /// By default stores in `~/.savepoint/workspaces/<ws_hash>/` to keep the user
-    /// repository 100% clean and prevent recursive APFS clone errors.
+    /// Routes by filesystem device ID (`st_dev`) so `clonefile(2)` / `FICLONE`
+    /// never fail with `EXDEV`.
     pub fn resolve_storage_dir(workspace_root: &Path) -> PathBuf {
         let canonical = workspace_root
             .canonicalize()
             .unwrap_or_else(|_| workspace_root.to_path_buf());
+        let hash = format!("{:x}", md5_or_simple_hash(&canonical.to_string_lossy()));
 
         // Use custom root if SAVEPOINT_DIR is set (useful for tests)
         if let Ok(custom_dir) = std::env::var("SAVEPOINT_DIR") {
-            let hash = format!("{:x}", md5_or_simple_hash(&canonical.to_string_lossy()));
             return PathBuf::from(custom_dir).join("workspaces").join(hash);
         }
 
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        let hash = format!("{:x}", md5_or_simple_hash(&canonical.to_string_lossy()));
-        PathBuf::from(home)
-            .join(".savepoint")
-            .join("workspaces")
-            .join(hash)
+        let home_savepoint = PathBuf::from(home).join(".savepoint");
+        let _ = fs::create_dir_all(&home_savepoint);
+
+        let ws_dev = fs::metadata(&canonical).map(|m| m.dev()).ok();
+        let home_dev = fs::metadata(&home_savepoint).map(|m| m.dev()).ok();
+
+        // Case A: Same filesystem volume as ~/.savepoint
+        if ws_dev.is_some() && ws_dev == home_dev {
+            return home_savepoint.join("workspaces").join(hash);
+        }
+
+        // Case B: External volume — try sibling directory <workspace_parent>/.savepoint-spool/<hash>
+        if let Some(parent) = canonical.parent() {
+            let sibling_spool = parent.join(".savepoint-spool");
+            if fs::create_dir_all(&sibling_spool).is_ok() {
+                let sibling_dev = fs::metadata(&sibling_spool).map(|m| m.dev()).ok();
+                if ws_dev.is_some() && ws_dev == sibling_dev {
+                    return sibling_spool.join(&hash);
+                }
+            }
+        }
+
+        // Case C: Fallback inside workspace <.savepoint/workspaces/<hash>> with .git/info/exclude
+        ensure_git_exclude_savepoint(&canonical);
+        canonical.join(".savepoint").join("workspaces").join(hash)
     }
 
     /// Begins a new transaction for the given `workspace_root`.
@@ -50,10 +72,11 @@ impl ShadowEngine {
             source: e,
         })?;
 
-        // Snapshot 0: baseline pristine state
+        // Snapshot 0: baseline pristine state (skips .git and .savepoint)
         let cp0_path = snapshots_dir.join("cp_0");
-        clone_tree(&ws, &cp0_path)?;
+        clone_workspace(&ws, &cp0_path)?;
 
+        let content_hash = compute_checkpoint_hash(None, "main", &[]);
         let initial_cp = Checkpoint {
             step_index: 0,
             timestamp: Utc::now(),
@@ -63,7 +86,7 @@ impl ShadowEngine {
             deltas: Vec::new(),
             branch: "main".to_string(),
             parent_step: None,
-            content_hash: None,
+            content_hash: Some(content_hash),
         };
 
         let mut tx = Transaction::new(tx_id, ws, tx_dir);
@@ -88,7 +111,7 @@ impl ShadowEngine {
         let current_cp_path = snapshots_dir.join(format!("cp_{}", next_step));
 
         // Take snapshot of current workspace state
-        clone_tree(&tx.workspace_root, &current_cp_path)?;
+        clone_workspace(&tx.workspace_root, &current_cp_path)?;
 
         // Compute deltas from the checkpoint the workspace was based on
         let base_cp = tx.active_checkpoint().or_else(|| tx.checkpoints.last()).ok_or_else(|| {
@@ -97,6 +120,7 @@ impl ShadowEngine {
         let parent_step = Some(base_cp.step_index);
         let branch = tx.active_branch.clone();
         let deltas = compute_deltas(&base_cp.snapshot_path, &current_cp_path)?;
+        let content_hash = compute_checkpoint_hash(parent_step, &branch, &deltas);
 
         let cp = Checkpoint {
             step_index: next_step,
@@ -107,7 +131,7 @@ impl ShadowEngine {
             deltas,
             branch,
             parent_step,
-            content_hash: None,
+            content_hash: Some(content_hash),
         };
 
         tx.record_checkpoint_in_branch(cp.clone());
@@ -154,34 +178,9 @@ impl ShadowEngine {
             Self::switch_branch(tx, target_branch)?;
         }
 
-        // Apply diff from current target workspace to source snapshot
+        // Apply diff from source snapshot onto current target workspace via CoW
         let deltas = compute_deltas(&src_head.snapshot_path, &tx.workspace_root)?;
-        for delta in deltas {
-            let target_file_in_ws = tx.workspace_root.join(&delta.relative_path);
-            let snapshot_file = src_head.snapshot_path.join(&delta.relative_path);
-            match delta.kind {
-                ChangeKind::Created => {
-                    if target_file_in_ws.exists() {
-                        if target_file_in_ws.is_dir() {
-                            let _ = fs::remove_dir_all(&target_file_in_ws);
-                        } else {
-                            let _ = fs::remove_file(&target_file_in_ws);
-                        }
-                    }
-                }
-                ChangeKind::Modified | ChangeKind::Deleted => {
-                    if let Some(parent) = target_file_in_ws.parent() {
-                        let _ = fs::create_dir_all(parent);
-                    }
-                    if snapshot_file.exists() {
-                        fs::copy(&snapshot_file, &target_file_in_ws).map_err(|e| SavepointError::Io {
-                            path: target_file_in_ws.clone(),
-                            source: e,
-                        })?;
-                    }
-                }
-            }
-        }
+        apply_snapshot_deltas(&src_head.snapshot_path, &tx.workspace_root, &deltas)?;
 
         let summary = format!("Merged branch '{}' into '{}'", source_branch, target_branch);
         Self::checkpoint(tx, Some(&summary), Some(&summary))
@@ -214,38 +213,9 @@ impl ShadowEngine {
             }
         }
 
-        // 2. Perform delta rollback / fast-forward to target_step:
+        // 2. Perform delta rollback / fast-forward to target_step via CoW:
         let deltas = compute_deltas(&target_cp.snapshot_path, &tx.workspace_root)?;
-
-        for delta in deltas {
-            let target_file_in_ws = tx.workspace_root.join(&delta.relative_path);
-            let snapshot_file = target_cp.snapshot_path.join(&delta.relative_path);
-
-            match delta.kind {
-                ChangeKind::Created => {
-                    // File exists in workspace but not in target snapshot -> delete it
-                    if target_file_in_ws.exists() {
-                        if target_file_in_ws.is_dir() {
-                            let _ = fs::remove_dir_all(&target_file_in_ws);
-                        } else {
-                            let _ = fs::remove_file(&target_file_in_ws);
-                        }
-                    }
-                }
-                ChangeKind::Modified | ChangeKind::Deleted => {
-                    // File was modified or deleted -> restore exact copy from snapshot
-                    if let Some(parent) = target_file_in_ws.parent() {
-                        let _ = fs::create_dir_all(parent);
-                    }
-                    if snapshot_file.exists() {
-                        fs::copy(&snapshot_file, &target_file_in_ws).map_err(|e| SavepointError::Io {
-                            path: target_file_in_ws.clone(),
-                            source: e,
-                        })?;
-                    }
-                }
-            }
-        }
+        apply_snapshot_deltas(&target_cp.snapshot_path, &tx.workspace_root, &deltas)?;
 
         // 3. DO NOT PRUNE! Update current_step_index so the entire timeline remains intact!
         tx.current_step_index = Some(target_step);
@@ -376,6 +346,112 @@ impl ShadowEngine {
         }
 
         Ok(())
+    }
+}
+
+fn apply_snapshot_deltas(
+    snapshot_path: &Path,
+    workspace_root: &Path,
+    deltas: &[FileDelta],
+) -> Result<()> {
+    for delta in deltas {
+        let target_file_in_ws = workspace_root.join(&delta.relative_path);
+        let snapshot_file = snapshot_path.join(&delta.relative_path);
+
+        match delta.kind {
+            ChangeKind::Created => {
+                // Path exists in workspace but not in target snapshot -> remove it
+                if let Ok(meta) = target_file_in_ws.symlink_metadata() {
+                    if meta.is_dir() && !meta.file_type().is_symlink() {
+                        let _ = fs::remove_dir_all(&target_file_in_ws);
+                    } else {
+                        let _ = fs::remove_file(&target_file_in_ws);
+                    }
+                }
+            }
+            ChangeKind::Modified | ChangeKind::Deleted => {
+                // Path was modified or deleted -> restore via CoW clone_tree from snapshot
+                if snapshot_file.symlink_metadata().is_ok() {
+                    clone_tree(&snapshot_file, &target_file_in_ws)?;
+                }
+            }
+        }
+
+        cleanup_orphaned_sqlite_companions(&delta.relative_path, snapshot_path, workspace_root);
+    }
+
+    Ok(())
+}
+
+fn cleanup_orphaned_sqlite_companions(
+    rel_path: &Path,
+    snapshot_path: &Path,
+    workspace_root: &Path,
+) {
+    let Some(name) = rel_path.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let is_sqlite = name.ends_with(".db") || name.ends_with(".sqlite") || name.ends_with(".sqlite3");
+    if !is_sqlite {
+        return;
+    }
+
+    for suffix in ["-wal", "-shm"] {
+        let companion_name = format!("{}{}", name, suffix);
+        let companion_rel = match rel_path.parent() {
+            Some(parent) => parent.join(companion_name),
+            None => PathBuf::from(companion_name),
+        };
+        let snap_companion = snapshot_path.join(&companion_rel);
+        let ws_companion = workspace_root.join(&companion_rel);
+
+        if snap_companion.symlink_metadata().is_err() && ws_companion.symlink_metadata().is_ok() {
+            let _ = fs::remove_file(&ws_companion);
+        }
+    }
+}
+
+fn compute_checkpoint_hash(
+    parent_step: Option<usize>,
+    branch: &str,
+    deltas: &[FileDelta],
+) -> String {
+    let mut hasher = Sha256::new();
+    match parent_step {
+        Some(p) => hasher.update(format!("parent:{}\n", p).as_bytes()),
+        None => hasher.update(b"parent:root\n"),
+    }
+    hasher.update(format!("branch:{}\n", branch).as_bytes());
+    for d in deltas {
+        hasher.update(
+            format!(
+                "delta:{}:{:?}:{:?}:{:?}\n",
+                d.relative_path.to_string_lossy(),
+                d.kind,
+                d.old_size,
+                d.new_size
+            )
+            .as_bytes(),
+        );
+    }
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn ensure_git_exclude_savepoint(workspace_root: &Path) {
+    let exclude_path = workspace_root.join(".git").join("info").join("exclude");
+    if let Some(parent) = exclude_path.parent() {
+        if parent.exists() {
+            let existing = fs::read_to_string(&exclude_path).unwrap_or_default();
+            if !existing.lines().any(|line| line.trim() == ".savepoint/" || line.trim() == ".savepoint") {
+                let mut updated = existing;
+                if !updated.ends_with('\n') && !updated.is_empty() {
+                    updated.push('\n');
+                }
+                updated.push_str(".savepoint/\n");
+                let _ = fs::write(&exclude_path, updated);
+            }
+        }
     }
 }
 

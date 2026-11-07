@@ -69,3 +69,56 @@ fn test_engine_transaction_lifecycle() {
     ShadowEngine::commit(&mut tx).expect("Commit failed");
     assert_eq!(tx.status, TransactionStatus::Committed);
 }
+
+#[test]
+fn test_rewind_cleans_up_orphaned_sqlite_wal_and_shm_and_populates_content_hash() {
+    let temp = tempfile::tempdir().unwrap();
+    let ws = temp.path();
+
+    let db_path = ws.join("app.db");
+    fs::write(&db_path, "sqlite-v1-clean").unwrap();
+
+    let mut tx = ShadowEngine::begin_transaction(ws).unwrap();
+    assert!(tx.checkpoints[0].content_hash.as_deref().unwrap().len() == 64);
+
+    // Simulate dirty WAL writes during agent execution
+    fs::write(&db_path, "sqlite-v2-dirty").unwrap();
+    fs::write(ws.join("app.db-wal"), "dirty-wal-frames").unwrap();
+    fs::write(ws.join("app.db-shm"), "dirty-shm-index").unwrap();
+
+    let cp1 = ShadowEngine::checkpoint(&mut tx, Some("dirty db state"), None).unwrap();
+    assert_eq!(cp1.content_hash.as_deref().unwrap().len(), 64);
+    assert_ne!(tx.checkpoints[0].content_hash, cp1.content_hash);
+
+    // Rewind back to Step 0 (where app.db-wal and app.db-shm did not exist)
+    ShadowEngine::rewind(&mut tx, 0).unwrap();
+
+    assert_eq!(fs::read_to_string(&db_path).unwrap(), "sqlite-v1-clean");
+    assert!(!ws.join("app.db-wal").exists(), "orphaned -wal must be removed");
+    assert!(!ws.join("app.db-shm").exists(), "orphaned -shm must be removed");
+}
+
+#[test]
+fn test_heavy_node_modules_collapsed_in_deltas_and_restored_on_rewind() {
+    let temp = tempfile::tempdir().unwrap();
+    let ws = temp.path();
+
+    fs::create_dir_all(ws.join("node_modules/pkg_v1")).unwrap();
+    fs::write(ws.join("node_modules/pkg_v1/index.js"), "v1").unwrap();
+
+    let mut tx = ShadowEngine::begin_transaction(ws).unwrap();
+
+    // Agent installs pkg_v2 and removes pkg_v1
+    fs::remove_dir_all(ws.join("node_modules/pkg_v1")).unwrap();
+    fs::create_dir_all(ws.join("node_modules/pkg_v2")).unwrap();
+    fs::write(ws.join("node_modules/pkg_v2/index.js"), "v2").unwrap();
+
+    let cp1 = ShadowEngine::checkpoint(&mut tx, Some("upgrade deps"), None).unwrap();
+    assert_eq!(cp1.deltas.len(), 1);
+    assert_eq!(cp1.deltas[0].relative_path, std::path::PathBuf::from("node_modules"));
+
+    // Rewind to Step 0 -> pkg_v1 must be restored and pkg_v2 gone!
+    ShadowEngine::rewind(&mut tx, 0).unwrap();
+    assert!(ws.join("node_modules/pkg_v1/index.js").exists());
+    assert!(!ws.join("node_modules/pkg_v2").exists());
+}
