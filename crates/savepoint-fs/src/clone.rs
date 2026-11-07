@@ -114,6 +114,8 @@ pub fn fallback_copy_tree(src: &Path, dst: &Path) -> Result<()> {
         return copy_single_file_preserving_mtime(src, dst, &src_meta);
     }
 
+    let mut dirs_to_stamp = Vec::new();
+
     for entry in WalkDir::new(src).follow_links(false) {
         let entry = entry.map_err(|e| SavepointError::Other(e.to_string()))?;
         let rel_path = entry
@@ -125,28 +127,30 @@ pub fn fallback_copy_tree(src: &Path, dst: &Path) -> Result<()> {
 
         if ft.is_dir() {
             fs::create_dir_all(&target_path).map_err(|e| SavepointError::Io {
-                path: target_path,
+                path: target_path.clone(),
                 source: e,
             })?;
-        } else if ft.is_symlink() {
-            if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| SavepointError::Io {
-                    path: parent.to_path_buf(),
-                    source: e,
-                })?;
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    dirs_to_stamp.push((target_path, mtime));
+                }
             }
+        } else if ft.is_symlink() {
             copy_symlink(entry.path(), &target_path)?;
         } else if ft.is_file() {
-            if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| SavepointError::Io {
-                    path: parent.to_path_buf(),
-                    source: e,
-                })?;
-            }
             let meta = entry.metadata().map_err(|e| SavepointError::Other(e.to_string()))?;
             copy_single_file_preserving_mtime(entry.path(), &target_path, &meta)?;
         }
     }
+
+    // Stamp directory mtimes in reverse (post-order: deepest directories first)
+    // so creating children never overwrites a parent directory's mtime.
+    for (dir_path, mtime) in dirs_to_stamp.into_iter().rev() {
+        if let Ok(dir_fh) = fs::File::open(&dir_path) {
+            let _ = dir_fh.set_modified(mtime);
+        }
+    }
+
     Ok(())
 }
 
@@ -157,6 +161,11 @@ fn copy_single_file_preserving_mtime(
 ) -> Result<()> {
     #[cfg(target_os = "linux")]
     if ficlone_file(src, dst).is_ok() {
+        if let Ok(mtime) = src_meta.modified() {
+            if let Ok(dst_file) = fs::File::open(dst) {
+                let _ = dst_file.set_modified(mtime);
+            }
+        }
         return Ok(());
     }
 
@@ -166,7 +175,8 @@ fn copy_single_file_preserving_mtime(
     })?;
 
     if let Ok(mtime) = src_meta.modified() {
-        if let Ok(dst_file) = fs::File::options().write(true).open(dst) {
+        // Open read-only so read-only files (e.g. 0o444) still have their mtime restored via futimens
+        if let Ok(dst_file) = fs::File::open(dst) {
             let _ = dst_file.set_modified(mtime);
         }
     }

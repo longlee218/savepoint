@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufReader, Read};
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 use savepoint_core::{ChangeKind, FileDelta, Result, SavepointError};
 
 pub const HEAVY_CACHE_DIRS: &[&str] = &[
@@ -37,7 +37,7 @@ pub fn compute_deltas(base_dir: &Path, current_dir: &Path) -> Result<Vec<FileDel
         for entry in WalkDir::new(base_dir)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !is_ignored(e.file_name()))
+            .filter_entry(|e| !is_ignored_entry(e))
         {
             let entry = entry.map_err(|e| SavepointError::Other(e.to_string()))?;
             let ft = entry.file_type();
@@ -67,7 +67,7 @@ pub fn compute_deltas(base_dir: &Path, current_dir: &Path) -> Result<Vec<FileDel
         for entry in WalkDir::new(current_dir)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !is_ignored(e.file_name()))
+            .filter_entry(|e| !is_ignored_entry(e))
         {
             let entry = entry.map_err(|e| SavepointError::Other(e.to_string()))?;
             let ft = entry.file_type();
@@ -179,12 +179,20 @@ pub fn compute_deltas(base_dir: &Path, current_dir: &Path) -> Result<Vec<FileDel
     Ok(deltas)
 }
 
-fn is_ignored(name: &std::ffi::OsStr) -> bool {
-    let s = name.to_string_lossy();
-    if s == ".savepoint" || s == ".git" {
+fn is_ignored_entry(entry: &DirEntry) -> bool {
+    if entry.depth() == 0 {
+        return false;
+    }
+    let s = entry.file_name().to_string_lossy();
+    if s == ".savepoint" || s == ".git" || s == "__pycache__" {
         return true;
     }
-    HEAVY_CACHE_DIRS.contains(&s.as_ref()) || HEAVY_DEP_DIRS.contains(&s.as_ref())
+    // Root-level heavy dependency directories and build caches are only filtered at depth 1
+    // so legitimate nested source directories like `src/target` are preserved.
+    if entry.depth() == 1 && entry.file_type().is_dir() {
+        return HEAVY_CACHE_DIRS.contains(&s.as_ref()) || HEAVY_DEP_DIRS.contains(&s.as_ref());
+    }
+    false
 }
 
 fn heavy_dir_changed(base_dep: &Path, curr_dep: &Path) -> bool {
@@ -235,23 +243,21 @@ fn symlinks_differ(p1: &Path, p2: &Path) -> Result<bool> {
 
 fn files_differ_streamed(p1: &Path, p2: &Path) -> Result<bool> {
     const CHUNK_SIZE: usize = 64 * 1024;
-    let f1 = File::open(p1).map_err(|e| SavepointError::Io {
+    let mut f1 = File::open(p1).map_err(|e| SavepointError::Io {
         path: p1.to_path_buf(),
         source: e,
     })?;
-    let f2 = File::open(p2).map_err(|e| SavepointError::Io {
+    let mut f2 = File::open(p2).map_err(|e| SavepointError::Io {
         path: p2.to_path_buf(),
         source: e,
     })?;
 
-    let mut r1 = BufReader::with_capacity(CHUNK_SIZE, f1);
-    let mut r2 = BufReader::with_capacity(CHUNK_SIZE, f2);
     let mut buf1 = vec![0u8; CHUNK_SIZE];
     let mut buf2 = vec![0u8; CHUNK_SIZE];
 
     loop {
-        let n1 = read_full_chunk(&mut r1, &mut buf1, p1)?;
-        let n2 = read_full_chunk(&mut r2, &mut buf2, p2)?;
+        let n1 = read_full_chunk(&mut f1, &mut buf1, p1)?;
+        let n2 = read_full_chunk(&mut f2, &mut buf2, p2)?;
         if n1 != n2 || buf1[..n1] != buf2[..n2] {
             return Ok(true);
         }

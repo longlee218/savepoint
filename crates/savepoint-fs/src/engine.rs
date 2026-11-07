@@ -19,7 +19,7 @@ impl ShadowEngine {
         let canonical = workspace_root
             .canonicalize()
             .unwrap_or_else(|_| workspace_root.to_path_buf());
-        let hash = format!("{:x}", md5_or_simple_hash(&canonical.to_string_lossy()));
+        let hash = workspace_id_hash(&canonical.to_string_lossy());
 
         // Use custom root if SAVEPOINT_DIR is set (useful for tests)
         if let Ok(custom_dir) = std::env::var("SAVEPOINT_DIR") {
@@ -50,7 +50,7 @@ impl ShadowEngine {
         }
 
         // Case C: Fallback inside workspace <.savepoint/workspaces/<hash>> with .git/info/exclude
-        ensure_git_exclude_savepoint(&canonical);
+        Self::ensure_git_exclude_savepoint(&canonical);
         canonical.join(".savepoint").join("workspaces").join(hash)
     }
 
@@ -203,14 +203,13 @@ impl ShadowEngine {
         // 1. SAFETY-NET CHECKPOINT:
         // Before jumping, check if current workspace has uncommitted changes!
         // If it does, freeze a safety checkpoint so user NEVER loses code!
-        if let Ok(live_deltas) = Self::compute_live_deltas(tx) {
-            if !live_deltas.is_empty() {
-                let _ = Self::checkpoint(
-                    tx,
-                    Some(&format!("Tự động lưu: Trước khi chuyển sang Bước #{}", target_step)),
-                    None,
-                );
-            }
+        let live_deltas = Self::compute_live_deltas(tx)?;
+        if !live_deltas.is_empty() {
+            Self::checkpoint(
+                tx,
+                Some(&format!("Tự động lưu: Trước khi chuyển sang Bước #{}", target_step)),
+                None,
+            )?;
         }
 
         // 2. Perform delta rollback / fast-forward to target_step via CoW:
@@ -302,8 +301,8 @@ impl ShadowEngine {
 
         // Fallback: Find the newest active transaction sorted by created_at
         let mut active_tx: Option<Transaction> = None;
-        for entry in fs::read_dir(tx_base).map_err(|e| SavepointError::Io {
-            path: ws.clone(),
+        for entry in fs::read_dir(&tx_base).map_err(|e| SavepointError::Io {
+            path: tx_base.clone(),
             source: e,
         })? {
             let entry = entry.map_err(|e| SavepointError::Other(e.to_string()))?;
@@ -340,12 +339,61 @@ impl ShadowEngine {
 
         // Update active pointer
         if let Some(ws_storage) = tx.shadow_root.parent().and_then(|p| p.parent()) {
+            let pointer_path = ws_storage.join("active_tx_id.txt");
             if tx.status == TransactionStatus::Active {
-                let _ = fs::write(ws_storage.join("active_tx_id.txt"), tx.id.as_str());
+                let _ = fs::write(&pointer_path, tx.id.as_str());
+            } else {
+                let _ = fs::remove_file(&pointer_path);
             }
         }
 
         Ok(())
+    }
+
+    /// Ensures `.savepoint/` is listed in the repository's `.git/info/exclude`
+    /// (supports both standard `.git` directories and git worktree/submodule `.git` files).
+    pub fn ensure_git_exclude_savepoint(workspace_root: &Path) {
+        let dot_git = workspace_root.join(".git");
+        let git_dir = if dot_git.is_file() {
+            fs::read_to_string(&dot_git).ok().and_then(|content| {
+                content
+                    .lines()
+                    .find_map(|line| line.strip_prefix("gitdir:"))
+                    .map(|p| {
+                        let raw = PathBuf::from(p.trim());
+                        if raw.is_absolute() {
+                            raw
+                        } else {
+                            workspace_root.join(raw)
+                        }
+                    })
+            })
+        } else if dot_git.is_dir() {
+            Some(dot_git)
+        } else {
+            None
+        };
+
+        let Some(git_dir) = git_dir else {
+            return;
+        };
+        let exclude_path = git_dir.join("info").join("exclude");
+        if let Some(parent) = exclude_path.parent() {
+            if parent.exists() {
+                let existing = fs::read_to_string(&exclude_path).unwrap_or_default();
+                if !existing
+                    .lines()
+                    .any(|line| line.trim() == ".savepoint/" || line.trim() == ".savepoint")
+                {
+                    let mut updated = existing;
+                    if !updated.ends_with('\n') && !updated.is_empty() {
+                        updated.push('\n');
+                    }
+                    updated.push_str(".savepoint/\n");
+                    let _ = fs::write(&exclude_path, updated);
+                }
+            }
+        }
     }
 }
 
@@ -435,30 +483,13 @@ fn compute_checkpoint_hash(
         );
     }
     let digest = hasher.finalize();
-    digest.iter().map(|b| format!("{:02x}", b)).collect()
+    format!("{:x}", digest)
 }
 
-fn ensure_git_exclude_savepoint(workspace_root: &Path) {
-    let exclude_path = workspace_root.join(".git").join("info").join("exclude");
-    if let Some(parent) = exclude_path.parent() {
-        if parent.exists() {
-            let existing = fs::read_to_string(&exclude_path).unwrap_or_default();
-            if !existing.lines().any(|line| line.trim() == ".savepoint/" || line.trim() == ".savepoint") {
-                let mut updated = existing;
-                if !updated.ends_with('\n') && !updated.is_empty() {
-                    updated.push('\n');
-                }
-                updated.push_str(".savepoint/\n");
-                let _ = fs::write(&exclude_path, updated);
-            }
-        }
-    }
-}
-
-fn md5_or_simple_hash(s: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
+fn workspace_id_hash(s: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(s.as_bytes());
+    let digest = hasher.finalize();
+    let hex = format!("{:x}", digest);
+    hex[..16].to_string()
 }

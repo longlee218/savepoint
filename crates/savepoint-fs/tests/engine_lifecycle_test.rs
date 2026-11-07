@@ -122,3 +122,38 @@ fn test_heavy_node_modules_collapsed_in_deltas_and_restored_on_rewind() {
     assert!(ws.join("node_modules/pkg_v1/index.js").exists());
     assert!(!ws.join("node_modules/pkg_v2").exists());
 }
+
+#[test]
+fn test_storage_routing_git_worktree_exclude_and_commit_cleans_active_tx_pointer() {
+    let temp = tempfile::tempdir().unwrap();
+    let ws = temp.path().join("worktree_ws");
+    let real_git_dir = temp.path().join("real_git_dir");
+    fs::create_dir_all(&ws).unwrap();
+    fs::create_dir_all(real_git_dir.join("info")).unwrap();
+
+    // Simulate a git worktree where .git is a file pointing to real_git_dir
+    fs::write(
+        ws.join(".git"),
+        format!("gitdir: {}\n", real_git_dir.display()),
+    )
+    .unwrap();
+    fs::write(ws.join("main.rs"), "fn main() {}").unwrap();
+
+    // Verify ensure_git_exclude_savepoint handles .git file pointer
+    ShadowEngine::ensure_git_exclude_savepoint(&ws);
+    let exclude_content = fs::read_to_string(real_git_dir.join("info/exclude")).unwrap();
+    assert!(exclude_content.contains(".savepoint/"));
+
+    // Verify resolve_storage_dir returns deterministic Sha256-based path and commit removes active_tx_id.txt
+    let storage1 = ShadowEngine::resolve_storage_dir(&ws);
+    let storage2 = ShadowEngine::resolve_storage_dir(&ws);
+    assert_eq!(storage1, storage2);
+
+    let mut tx = ShadowEngine::begin_transaction(&ws).unwrap();
+    assert!(storage1.join("active_tx_id.txt").exists());
+    ShadowEngine::commit(&mut tx).unwrap();
+    assert!(
+        !storage1.join("active_tx_id.txt").exists(),
+        "active_tx_id.txt should be cleaned up on commit"
+    );
+}

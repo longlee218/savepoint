@@ -100,6 +100,10 @@ fn test_heavy_dirs_collapsed_and_build_caches_ignored() {
     std::fs::create_dir_all(curr.join("target/debug/deps")).unwrap();
     std::fs::write(curr.join("target/debug/deps/libfoo.rlib"), "binary").unwrap();
 
+    // Populate legitimate nested src/target/mod.rs -> MUST NOT be ignored!
+    std::fs::create_dir_all(curr.join("src/target")).unwrap();
+    std::fs::write(curr.join("src/target/mod.rs"), "pub mod arch;").unwrap();
+
     // Populate node_modules/ with multiple nested files -> should collapse to 1 "node_modules" delta
     std::fs::create_dir_all(curr.join("node_modules/pkg_a")).unwrap();
     std::fs::write(curr.join("node_modules/pkg_a/index.js"), "module.exports = 1;").unwrap();
@@ -107,7 +111,7 @@ fn test_heavy_dirs_collapsed_and_build_caches_ignored() {
     std::fs::write(curr.join("node_modules/pkg_b/index.js"), "module.exports = 2;").unwrap();
 
     let deltas = savepoint_fs::compute_deltas(&base, &curr).unwrap();
-    assert_eq!(deltas.len(), 1);
-    assert_eq!(deltas[0].relative_path, std::path::PathBuf::from("node_modules"));
-    assert_eq!(deltas[0].kind, savepoint_core::ChangeKind::Created);
+    assert_eq!(deltas.len(), 2, "Expected node_modules and src/target/mod.rs deltas, got: {:?}", deltas);
+    assert!(deltas.iter().any(|d| d.relative_path == std::path::Path::new("node_modules") && d.kind == savepoint_core::ChangeKind::Created));
+    assert!(deltas.iter().any(|d| d.relative_path == std::path::Path::new("src/target/mod.rs") && d.kind == savepoint_core::ChangeKind::Created));
 }

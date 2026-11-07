@@ -81,20 +81,42 @@ fn test_clone_workspace_skips_git_and_savepoint_and_handles_broken_symlink() {
 #[test]
 fn test_fallback_copy_preserves_mtime_for_zero_diff() {
     use savepoint_fs::clone::fallback_copy_tree;
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::time::{Duration, SystemTime};
 
     let temp = tempfile::tempdir().unwrap();
     let src = temp.path().join("src");
     let dst = temp.path().join("dst");
-    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(src.join("node_modules/pkg")).unwrap();
     let f = src.join("data.txt");
+    let ro = src.join("readonly.txt");
+    let pkg_f = src.join("node_modules/pkg/index.js");
     std::fs::write(&f, "hello world").unwrap();
+    std::fs::write(&ro, "immutable secret").unwrap();
+    std::fs::write(&pkg_f, "module.exports = 1;").unwrap();
+
+    // Set an explicit historical mtime (10 seconds ago) on files and directories
+    // so we can verify fallback_copy_tree actually copies mtime rather than stamping now().
+    let past = SystemTime::now() - Duration::from_secs(10);
+    for p in [&f, &ro, &pkg_f, &src.join("node_modules/pkg"), &src.join("node_modules")] {
+        let fh = std::fs::File::open(p).unwrap();
+        fh.set_modified(past).unwrap();
+    }
+    // Make readonly.txt read-only (0o444)
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let fh_ro = std::fs::File::open(&ro).unwrap();
+    fh_ro.set_modified(past).unwrap();
 
     fallback_copy_tree(&src, &dst).expect("fallback_copy_tree must succeed");
 
-    let m1 = std::fs::symlink_metadata(&f).unwrap();
-    let m2 = std::fs::symlink_metadata(dst.join("data.txt")).unwrap();
-    assert_eq!(m1.len(), m2.len());
-    assert_eq!(m1.mtime(), m2.mtime());
-    assert_eq!(m1.mtime_nsec(), m2.mtime_nsec());
+    for rel in ["data.txt", "readonly.txt", "node_modules", "node_modules/pkg"] {
+        let m1 = std::fs::symlink_metadata(src.join(rel)).unwrap();
+        let m2 = std::fs::symlink_metadata(dst.join(rel)).unwrap();
+        assert_eq!(m1.mtime(), m2.mtime(), "mtime mismatch for {}", rel);
+        assert_eq!(m1.mtime_nsec(), m2.mtime_nsec(), "mtime_nsec mismatch for {}", rel);
+    }
+
+    // Also verify compute_deltas between src and fallback-copied dst is 0 deltas!
+    let deltas = savepoint_fs::compute_deltas(&src, &dst).unwrap();
+    assert!(deltas.is_empty(), "expected 0 deltas after fallback_copy_tree, got: {:?}", deltas);
 }
