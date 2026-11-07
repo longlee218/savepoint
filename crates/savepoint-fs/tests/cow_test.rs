@@ -53,3 +53,48 @@ fn test_apfs_cow_clone_and_benchmark() {
         elapsed
     );
 }
+
+#[test]
+fn test_clone_workspace_skips_git_and_savepoint_and_handles_broken_symlink() {
+    use savepoint_fs::clone_workspace;
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
+
+    let temp = tempfile::tempdir().unwrap();
+    let ws = temp.path().join("ws");
+    let snap = temp.path().join("snap");
+    std::fs::create_dir_all(ws.join(".git/objects")).unwrap();
+    std::fs::write(ws.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::create_dir_all(ws.join(".savepoint/spool")).unwrap();
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(ws.join("src/lib.rs"), "pub fn ok() {}").unwrap();
+    symlink(Path::new("nonexistent_target"), ws.join("src/dangling_link")).unwrap();
+
+    clone_workspace(&ws, &snap).expect("clone_workspace must succeed");
+
+    assert!(!snap.join(".git").exists());
+    assert!(!snap.join(".savepoint").exists());
+    assert!(snap.join("src/lib.rs").exists());
+    assert!(snap.join("src/dangling_link").symlink_metadata().is_ok());
+}
+
+#[test]
+fn test_fallback_copy_preserves_mtime_for_zero_diff() {
+    use savepoint_fs::clone::fallback_copy_tree;
+    use std::os::unix::fs::MetadataExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let src = temp.path().join("src");
+    let dst = temp.path().join("dst");
+    std::fs::create_dir_all(&src).unwrap();
+    let f = src.join("data.txt");
+    std::fs::write(&f, "hello world").unwrap();
+
+    fallback_copy_tree(&src, &dst).expect("fallback_copy_tree must succeed");
+
+    let m1 = std::fs::symlink_metadata(&f).unwrap();
+    let m2 = std::fs::symlink_metadata(dst.join("data.txt")).unwrap();
+    assert_eq!(m1.len(), m2.len());
+    assert_eq!(m1.mtime(), m2.mtime());
+    assert_eq!(m1.mtime_nsec(), m2.mtime_nsec());
+}

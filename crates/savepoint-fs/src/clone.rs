@@ -1,44 +1,78 @@
+use std::fs;
 use std::path::Path;
 use savepoint_core::{Result, SavepointError};
+use walkdir::WalkDir;
 
 #[cfg(target_os = "macos")]
 use crate::darwin::sys::apfs_clone;
 
-/// Clones an entire directory or single file from `src` to `dst` using
-/// Copy-on-Write (CoW).
-///
-/// On macOS APFS, this invokes `clonefile(2)` which duplicates the inode
-/// tree and blocks instantly with 0 bytes physical storage allocated.
-pub fn clone_tree(src: &Path, dst: &Path) -> Result<()> {
-    if !src.exists() {
+#[cfg(target_os = "linux")]
+use crate::linux::sys::ficlone_file;
+
+/// Clones top-level workspace entries from `workspace_root` into `snapshot_dir`,
+/// explicitly skipping `.git` and `.savepoint` directories.
+pub fn clone_workspace(workspace_root: &Path, snapshot_dir: &Path) -> Result<()> {
+    if !workspace_root.exists() {
         return Err(SavepointError::Io {
-            path: src.to_path_buf(),
+            path: workspace_root.to_path_buf(),
             source: std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Source path does not exist: {:?}", src),
+                format!("Workspace path does not exist: {:?}", workspace_root),
             ),
         });
     }
 
-    // dst must not exist prior to clonefile
-    if dst.exists() {
-        if dst.is_dir() {
-            std::fs::remove_dir_all(dst).map_err(|e| SavepointError::Io {
-                path: dst.to_path_buf(),
-                source: e,
-            })?;
-        } else {
-            std::fs::remove_file(dst).map_err(|e| SavepointError::Io {
-                path: dst.to_path_buf(),
-                source: e,
-            })?;
+    if snapshot_dir.symlink_metadata().is_ok() {
+        remove_path(snapshot_dir)?;
+    }
+    fs::create_dir_all(snapshot_dir).map_err(|e| SavepointError::Io {
+        path: snapshot_dir.to_path_buf(),
+        source: e,
+    })?;
+
+    for entry in fs::read_dir(workspace_root).map_err(|e| SavepointError::Io {
+        path: workspace_root.to_path_buf(),
+        source: e,
+    })? {
+        let entry = entry.map_err(|e| SavepointError::Io {
+            path: workspace_root.to_path_buf(),
+            source: e,
+        })?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == ".git" || name_str == ".savepoint" {
+            continue;
         }
+        let src_entry = entry.path();
+        let dst_entry = snapshot_dir.join(&name);
+        clone_tree(&src_entry, &dst_entry)?;
+    }
+
+    Ok(())
+}
+
+/// Clones an entire directory, file, or symlink from `src` to `dst` using
+/// Copy-on-Write (CoW) when supported by the underlying filesystem.
+///
+/// On macOS APFS, invokes `clonefile(2)` and falls back to `fallback_copy_tree`
+/// on cross-device (`EXDEV`) or unsupported (`ENOTSUP`) mounts.
+pub fn clone_tree(src: &Path, dst: &Path) -> Result<()> {
+    if let Err(e) = src.symlink_metadata() {
+        return Err(SavepointError::Io {
+            path: src.to_path_buf(),
+            source: e,
+        });
+    }
+
+    // dst must not exist prior to clonefile
+    if dst.symlink_metadata().is_ok() {
+        remove_path(dst)?;
     }
 
     // Ensure parent directory of dst exists
     if let Some(parent) = dst.parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent).map_err(|e| SavepointError::Io {
+            fs::create_dir_all(parent).map_err(|e| SavepointError::Io {
                 path: parent.to_path_buf(),
                 source: e,
             })?;
@@ -47,7 +81,15 @@ pub fn clone_tree(src: &Path, dst: &Path) -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        apfs_clone(src, dst, true)
+        match apfs_clone(src, dst, true) {
+            Ok(()) => Ok(()),
+            Err(SavepointError::CloneFileFailed { errno, .. })
+                if errno == libc::EXDEV || errno == libc::ENOTSUP =>
+            {
+                fallback_copy_tree(src, dst)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -56,32 +98,110 @@ pub fn clone_tree(src: &Path, dst: &Path) -> Result<()> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn fallback_copy_tree(src: &Path, dst: &Path) -> Result<()> {
-    use walkdir::WalkDir;
+/// Copies a directory tree, single file, or symlink while preserving modification timestamps.
+/// On Linux, attempts `ioctl(FICLONE)` reflink before falling back to byte copy.
+pub fn fallback_copy_tree(src: &Path, dst: &Path) -> Result<()> {
+    let src_meta = src.symlink_metadata().map_err(|e| SavepointError::Io {
+        path: src.to_path_buf(),
+        source: e,
+    })?;
 
-    for entry in WalkDir::new(src) {
+    if src_meta.file_type().is_symlink() {
+        return copy_symlink(src, dst);
+    }
+
+    if src_meta.file_type().is_file() {
+        return copy_single_file_preserving_mtime(src, dst, &src_meta);
+    }
+
+    for entry in WalkDir::new(src).follow_links(false) {
         let entry = entry.map_err(|e| SavepointError::Other(e.to_string()))?;
-        let rel_path = entry.path().strip_prefix(src).map_err(|e| SavepointError::Other(e.to_string()))?;
+        let rel_path = entry
+            .path()
+            .strip_prefix(src)
+            .map_err(|e| SavepointError::Other(e.to_string()))?;
         let target_path = dst.join(rel_path);
+        let ft = entry.file_type();
 
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target_path).map_err(|e| SavepointError::Io {
+        if ft.is_dir() {
+            fs::create_dir_all(&target_path).map_err(|e| SavepointError::Io {
                 path: target_path,
                 source: e,
             })?;
-        } else if entry.file_type().is_file() {
+        } else if ft.is_symlink() {
             if let Some(parent) = target_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| SavepointError::Io {
+                fs::create_dir_all(parent).map_err(|e| SavepointError::Io {
                     path: parent.to_path_buf(),
                     source: e,
                 })?;
             }
-            std::fs::copy(entry.path(), &target_path).map_err(|e| SavepointError::Io {
-                path: target_path,
-                source: e,
-            })?;
+            copy_symlink(entry.path(), &target_path)?;
+        } else if ft.is_file() {
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| SavepointError::Io {
+                    path: parent.to_path_buf(),
+                    source: e,
+                })?;
+            }
+            let meta = entry.metadata().map_err(|e| SavepointError::Other(e.to_string()))?;
+            copy_single_file_preserving_mtime(entry.path(), &target_path, &meta)?;
         }
     }
     Ok(())
+}
+
+fn copy_single_file_preserving_mtime(
+    src: &Path,
+    dst: &Path,
+    src_meta: &fs::Metadata,
+) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if ficlone_file(src, dst).is_ok() {
+        return Ok(());
+    }
+
+    fs::copy(src, dst).map_err(|e| SavepointError::Io {
+        path: dst.to_path_buf(),
+        source: e,
+    })?;
+
+    if let Ok(mtime) = src_meta.modified() {
+        if let Ok(dst_file) = fs::File::options().write(true).open(dst) {
+            let _ = dst_file.set_modified(mtime);
+        }
+    }
+    Ok(())
+}
+
+fn copy_symlink(src: &Path, dst: &Path) -> Result<()> {
+    let link_target = fs::read_link(src).map_err(|e| SavepointError::Io {
+        path: src.to_path_buf(),
+        source: e,
+    })?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&link_target, dst).map_err(|e| SavepointError::Io {
+            path: dst.to_path_buf(),
+            source: e,
+        })?;
+    }
+    Ok(())
+}
+
+fn remove_path(p: &Path) -> Result<()> {
+    let meta = p.symlink_metadata().map_err(|e| SavepointError::Io {
+        path: p.to_path_buf(),
+        source: e,
+    })?;
+    if meta.is_dir() && !meta.file_type().is_symlink() {
+        fs::remove_dir_all(p).map_err(|e| SavepointError::Io {
+            path: p.to_path_buf(),
+            source: e,
+        })
+    } else {
+        fs::remove_file(p).map_err(|e| SavepointError::Io {
+            path: p.to_path_buf(),
+            source: e,
+        })
+    }
 }
