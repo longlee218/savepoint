@@ -44,3 +44,70 @@ fn test_directory_diff_detection() {
     let deleted = deltas.iter().find(|d| d.kind == ChangeKind::Deleted).expect("Missing Deleted");
     assert_eq!(deleted.relative_path, std::path::Path::new("src/delete.rs"));
 }
+
+#[test]
+fn test_two_stage_stat_fast_path_and_same_size_content_diff() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().join("base");
+    let curr = temp.path().join("curr");
+    std::fs::create_dir_all(&base).unwrap();
+
+    let untouched_base = base.join("untouched.txt");
+    let rewritten_base = base.join("rewritten.txt");
+    std::fs::write(&untouched_base, "aaaa").unwrap();
+    std::fs::write(&rewritten_base, "1111").unwrap();
+    std::os::unix::fs::symlink(std::path::Path::new("missing_target"), base.join("broken_link")).unwrap();
+
+    savepoint_fs::clone_workspace(&base, &curr).unwrap();
+
+    // Make untouched file unreadable (0o000) while preserving its mtime from clone
+    let orig_mtime = untouched_base.metadata().unwrap().modified().unwrap();
+    let untouched_curr = curr.join("untouched.txt");
+    std::fs::set_permissions(&untouched_curr, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(
+        untouched_curr.metadata().unwrap().modified().unwrap(),
+        orig_mtime
+    );
+
+    // Overwrite rewritten.txt with same byte length (4 bytes) and advance mtime
+    let rewritten_curr = curr.join("rewritten.txt");
+    std::fs::write(&rewritten_curr, "2222").unwrap();
+    let f = std::fs::File::options().write(true).open(&rewritten_curr).unwrap();
+    f.set_modified(orig_mtime + Duration::from_secs(5)).unwrap();
+
+    let deltas = savepoint_fs::compute_deltas(&base, &curr).expect("diff must succeed without opening untouched.txt");
+
+    // Restore permissions so tempdir cleanup succeeds
+    std::fs::set_permissions(&untouched_curr, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0].relative_path, std::path::PathBuf::from("rewritten.txt"));
+    assert_eq!(deltas[0].kind, savepoint_core::ChangeKind::Modified);
+}
+
+#[test]
+fn test_heavy_dirs_collapsed_and_build_caches_ignored() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().join("base");
+    let curr = temp.path().join("curr");
+    std::fs::create_dir_all(&base).unwrap();
+    savepoint_fs::clone_workspace(&base, &curr).unwrap();
+
+    // Populate target/ with build artifacts -> should be ignored in compute_deltas
+    std::fs::create_dir_all(curr.join("target/debug/deps")).unwrap();
+    std::fs::write(curr.join("target/debug/deps/libfoo.rlib"), "binary").unwrap();
+
+    // Populate node_modules/ with multiple nested files -> should collapse to 1 "node_modules" delta
+    std::fs::create_dir_all(curr.join("node_modules/pkg_a")).unwrap();
+    std::fs::write(curr.join("node_modules/pkg_a/index.js"), "module.exports = 1;").unwrap();
+    std::fs::create_dir_all(curr.join("node_modules/pkg_b")).unwrap();
+    std::fs::write(curr.join("node_modules/pkg_b/index.js"), "module.exports = 2;").unwrap();
+
+    let deltas = savepoint_fs::compute_deltas(&base, &curr).unwrap();
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0].relative_path, std::path::PathBuf::from("node_modules"));
+    assert_eq!(deltas[0].kind, savepoint_core::ChangeKind::Created);
+}
