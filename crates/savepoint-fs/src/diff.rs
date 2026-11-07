@@ -13,6 +13,7 @@ pub const HEAVY_CACHE_DIRS: &[&str] = &[
     ".gradle",
     ".turbo",
     ".cache",
+    ".sp-tmp",
 ];
 
 pub const HEAVY_DEP_DIRS: &[&str] = &["node_modules", ".venv", "venv"];
@@ -184,7 +185,7 @@ fn is_ignored_entry(entry: &DirEntry) -> bool {
         return false;
     }
     let s = entry.file_name().to_string_lossy();
-    if s == ".savepoint" || s == ".git" || s == "__pycache__" {
+    if s == ".savepoint" || s == ".git" || s == "__pycache__" || s == ".sp-tmp" {
         return true;
     }
     // Root-level heavy dependency directories and build caches are only filtered at depth 1
