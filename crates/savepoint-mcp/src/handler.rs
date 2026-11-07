@@ -144,6 +144,7 @@ impl McpHandler {
                                 "type": "object",
                                 "properties": {
                                     "output": { "type": "string", "description": "Output .spbundle file path (default: savepoint.spbundle)" },
+                                    "step": { "type": "integer", "description": "Optional checkpoint step index to pin in the exported bundle" },
                                     "path": { "type": "string", "description": "Workspace root directory" }
                                 }
                             }
@@ -325,7 +326,8 @@ impl McpHandler {
                     .and_then(|o| o.as_str())
                     .map(PathBuf::from)
                     .unwrap_or_else(|| ws_path.join("savepoint.spbundle"));
-                let stats = FlightRecorder::export_bundle(&ws_path, &output)
+                let step = args.get("step").and_then(|s| s.as_u64()).map(|s| s as usize);
+                let stats = FlightRecorder::export_bundle_with_step(&ws_path, &output, step)
                     .map_err(|e| format!("Failed to export .spbundle: {}", e))?;
                 Ok(serde_json::to_string_pretty(&stats).unwrap_or_default())
             }

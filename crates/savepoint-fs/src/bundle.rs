@@ -11,6 +11,8 @@ use crate::engine::ShadowEngine;
 pub struct FlightBundle {
     pub format_version: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub pinned_step: Option<usize>,
     pub scrubbed_files_count: usize,
     pub scrubbed_secrets_count: usize,
     pub transaction: Transaction,
@@ -30,6 +32,8 @@ pub enum BundleFileState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleExportStats {
     pub transaction_id: String,
+    pub replay_uri: String,
+    pub pinned_step: Option<usize>,
     pub output_path: PathBuf,
     pub checkpoints_count: usize,
     pub tracked_files_count: usize,
@@ -50,12 +54,28 @@ impl FlightRecorder {
     /// Exports the active or latest committed transaction for `workspace_root` into a portable `.spbundle` file,
     /// automatically scrubbing sensitive files (`.env*`, keys, certs) and inline API tokens.
     pub fn export_bundle(workspace_root: &Path, output_path: &Path) -> Result<BundleExportStats> {
+        Self::export_bundle_with_step(workspace_root, output_path, None)
+    }
+
+    /// Exports a `.spbundle` file with an optional `pinned_step` (`sp share --step <N>`) and registers
+    /// a local replay URI (`sp://replay/<short_id>`) under `~/.savepoint/bundles/`.
+    pub fn export_bundle_with_step(
+        workspace_root: &Path,
+        output_path: &Path,
+        pinned_step: Option<usize>,
+    ) -> Result<BundleExportStats> {
         let mut tx = ShadowEngine::load_latest_transaction(workspace_root)?.ok_or_else(|| {
             SavepointError::Other(format!(
                 "No Savepoint transaction found for workspace {:?}",
                 workspace_root
             ))
         })?;
+
+        if let Some(step) = pinned_step {
+            if !tx.checkpoints.iter().any(|cp| cp.step_index == step) {
+                return Err(SavepointError::CheckpointNotFound(step, tx.id.to_string()));
+            }
+        }
 
         let mut candidate_paths: BTreeSet<PathBuf> = BTreeSet::new();
         let mut sensitive_paths: BTreeSet<PathBuf> = BTreeSet::new();
@@ -163,6 +183,7 @@ impl FlightRecorder {
         let bundle = FlightBundle {
             format_version: "savepoint-bundle/v1".to_string(),
             created_at: Utc::now(),
+            pinned_step,
             scrubbed_files_count,
             scrubbed_secrets_count,
             transaction: tx,
@@ -179,13 +200,26 @@ impl FlightRecorder {
         }
 
         let serialized = serde_json::to_string_pretty(&bundle)?;
-        fs::write(output_path, serialized).map_err(|e| SavepointError::Io {
+        fs::write(output_path, &serialized).map_err(|e| SavepointError::Io {
             path: output_path.to_path_buf(),
             source: e,
         })?;
 
+        // Also cache in ~/.savepoint/bundles/<short_id>.spbundle so `sp replay sp://replay/<short_id>` works seamlessly
+        let short_id = match pinned_step {
+            Some(s) => format!("{}_s{}", transaction_id, s),
+            None => transaction_id.clone(),
+        };
+        let replay_uri = format!("sp://replay/{}", short_id);
+        if let Some(cache_dir) = bundle_store_dir() {
+            let _ = fs::create_dir_all(&cache_dir);
+            let _ = fs::write(cache_dir.join(format!("{}.spbundle", short_id)), &serialized);
+        }
+
         Ok(BundleExportStats {
             transaction_id,
+            replay_uri,
+            pinned_step,
             output_path: output_path.to_path_buf(),
             checkpoints_count,
             tracked_files_count,
@@ -194,19 +228,23 @@ impl FlightRecorder {
         })
     }
 
-    /// Replays a `.spbundle` file into `target_workspace` at `target_step` (defaults to the bundle's active step).
+    /// Replays a `.spbundle` file or `sp://replay/<id>` URI into `target_workspace` at `target_step`
+    /// (defaults to `bundle.pinned_step` if present, otherwise the bundle's active step).
     pub fn replay_bundle(
-        bundle_path: &Path,
+        bundle_path_or_uri: &Path,
         target_workspace: &Path,
         target_step: Option<usize>,
     ) -> Result<BundleReplayStats> {
-        let raw = fs::read_to_string(bundle_path).map_err(|e| SavepointError::Io {
-            path: bundle_path.to_path_buf(),
+        let resolved_bundle_path = resolve_bundle_path_or_uri(bundle_path_or_uri)?;
+        let raw = fs::read_to_string(&resolved_bundle_path).map_err(|e| SavepointError::Io {
+            path: resolved_bundle_path,
             source: e,
         })?;
         let bundle: FlightBundle = serde_json::from_str(&raw)?;
 
-        let step = target_step.unwrap_or_else(|| bundle.transaction.active_step());
+        let step = target_step
+            .or(bundle.pinned_step)
+            .unwrap_or_else(|| bundle.transaction.active_step());
         let files_map = bundle.step_files.get(&step).ok_or_else(|| {
             SavepointError::CheckpointNotFound(step, bundle.transaction.id.to_string())
         })?;
@@ -399,4 +437,48 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
         out.push(byte);
     }
     Ok(out)
+}
+
+fn bundle_store_dir() -> Option<PathBuf> {
+    if let Ok(custom_dir) = std::env::var("SAVEPOINT_DIR") {
+        return Some(PathBuf::from(custom_dir).join("bundles"));
+    }
+    let home = std::env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".savepoint").join("bundles"))
+}
+
+fn resolve_bundle_path_or_uri(input: &Path) -> Result<PathBuf> {
+    let raw = input.to_string_lossy();
+    // Note: Path::new("sp://replay/id") may normalize to "sp://replay/id" or "sp:/replay/id"
+    let maybe_id = raw
+        .strip_prefix("sp://replay/")
+        .or_else(|| raw.strip_prefix("sp:/replay/"));
+    if let Some(id) = maybe_id {
+        let clean_id = id.trim().trim_end_matches(".spbundle");
+        if clean_id.is_empty()
+            || clean_id.contains('/')
+            || clean_id.contains('\\')
+            || clean_id.contains("..")
+        {
+            return Err(SavepointError::Other(format!(
+                "Invalid replay URI identifier: '{}'",
+                id
+            )));
+        }
+        if let Some(store) = bundle_store_dir() {
+            let candidate = store.join(format!("{}.spbundle", clean_id));
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+        let local_candidate = PathBuf::from(format!("{}.spbundle", clean_id));
+        if local_candidate.exists() {
+            return Ok(local_candidate);
+        }
+        return Err(SavepointError::Other(format!(
+            "Could not resolve replay URI '{}'",
+            raw
+        )));
+    }
+    Ok(input.to_path_buf())
 }

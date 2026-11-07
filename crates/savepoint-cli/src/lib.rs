@@ -126,14 +126,17 @@ pub enum Commands {
         /// Output .spbundle path
         #[arg(short, long, default_value = "savepoint.spbundle")]
         output: PathBuf,
+        /// Optional specific checkpoint step index to pin in the exported bundle
+        #[arg(short, long)]
+        step: Option<usize>,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
-    /// Replay a .spbundle Flight Recorder file into a target directory at a specific step
+    /// Replay a .spbundle Flight Recorder file or sp://replay/<id> URI into a target directory
     Replay {
-        /// Path to the .spbundle file
+        /// Path to the .spbundle file or sp://replay/<id> URI
         bundle: PathBuf,
-        /// Checkpoint step index to replay (defaults to active step in bundle)
+        /// Checkpoint step index to replay (defaults to pinned or active step in bundle)
         #[arg(short, long)]
         step: Option<usize>,
         /// Target directory to replay into
@@ -238,6 +241,22 @@ pub fn run_cli() -> anyhow::Result<()> {
                     (
                         "status",
                         "---\ndescription: [Savepoint] Xem trạng thái phiên giao dịch đang hoạt động\n---\n!sp status\n",
+                    ),
+                    (
+                        "fork",
+                        "---\ndescription: [Savepoint] Phân nhánh thử nghiệm mới từ mốc hiện tại\n---\n!sp fork $ARGUMENTS\n",
+                    ),
+                    (
+                        "branches",
+                        "---\ndescription: [Savepoint] Liệt kê các nhánh trong phiên giao dịch\n---\n!sp branches\n",
+                    ),
+                    (
+                        "share",
+                        "---\ndescription: [Savepoint] Xuất gói tin Flight Recorder (.spbundle) đã lọc sạch secret để chia sẻ/tái hiện lỗi\n---\n!sp share $ARGUMENTS\n",
+                    ),
+                    (
+                        "replay",
+                        "---\ndescription: [Savepoint] Tái hiện lại chính xác trạng thái workspace từ file .spbundle hoặc URI sp://replay/...\n---\n!sp replay $ARGUMENTS\n",
                     ),
                 ];
 
@@ -571,15 +590,19 @@ pub fn run_cli() -> anyhow::Result<()> {
                 Ok::<(), anyhow::Error>(())
             })?;
         }
-        Commands::Share { output, path } => {
+        Commands::Share { output, step, path } => {
             let start = Instant::now();
-            let stats = FlightRecorder::export_bundle(&path, &output)?;
+            let stats = FlightRecorder::export_bundle_with_step(&path, &output, step)?;
             println!(
                 "\x1b[32m✔ [Savepoint]\x1b[0m 📦 Exported Flight Recorder bundle to \x1b[1m{:?}\x1b[0m in \x1b[36m{:?}\x1b[0m",
                 stats.output_path,
                 start.elapsed()
             );
             println!("  Transaction    : {}", stats.transaction_id);
+            println!("  Replay URI     : \x1b[36m{}\x1b[0m", stats.replay_uri);
+            if let Some(pinned) = stats.pinned_step {
+                println!("  Pinned Step    : #{}", pinned);
+            }
             println!("  Checkpoints    : {}", stats.checkpoints_count);
             println!("  Tracked files  : {}", stats.tracked_files_count);
             println!(

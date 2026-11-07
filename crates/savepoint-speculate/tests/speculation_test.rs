@@ -187,8 +187,9 @@ fn test_resource_governor_bounds_concurrency() {
     assert!(cores >= 1);
     assert!(mem_mb >= 512);
 
-    let normal = ResourceGovernor::recommended_concurrency(512, 10);
-    assert!((1..=8).contains(&normal));
+    // Master Plan formula caps default recommended concurrency at 3: min(RAM_GB / 4, Cores / 2, 3)
+    let normal = ResourceGovernor::recommended_concurrency(4096, 10);
+    assert!((1..=3).contains(&normal));
 
     // Requesting an enormous memory footprint per sandbox must clamp concurrency down to 1
     let constrained = ResourceGovernor::recommended_concurrency(10_000_000, 10);

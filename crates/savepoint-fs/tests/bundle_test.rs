@@ -52,8 +52,16 @@ fn test_flight_recorder_export_scrubs_secrets_and_replays_step_accurately() {
     // Commit transaction to also prove load_latest_transaction works on committed transactions
     ShadowEngine::commit(&mut tx).unwrap();
 
-    let export_stats = FlightRecorder::export_bundle(&ws, &bundle_path).unwrap();
+    // Export bundle with pinned_step = Some(1)
+    let export_stats =
+        FlightRecorder::export_bundle_with_step(&ws, &bundle_path, Some(1)).unwrap();
     assert!(bundle_path.exists());
+    assert_eq!(export_stats.pinned_step, Some(1));
+    assert!(
+        export_stats.replay_uri.starts_with("sp://replay/"),
+        "Expected sp://replay/<id> URI, got {}",
+        export_stats.replay_uri
+    );
     assert!(
         export_stats.scrubbed_files_count >= 1,
         "Expected .env to be scrubbed, got {}",
@@ -117,5 +125,18 @@ fn test_flight_recorder_export_scrubs_secrets_and_replays_step_accurately() {
         .unwrap()
         .file_type()
         .is_symlink());
-}
 
+    // Replay using the sp://replay/<id> URI with step = None (should use pinned_step = 1!)
+    let uri_repro = temp.path().join("uri_repro");
+    let replay_via_uri = FlightRecorder::replay_bundle(
+        std::path::Path::new(&export_stats.replay_uri),
+        &uri_repro,
+        None,
+    )
+    .unwrap();
+    assert_eq!(replay_via_uri.replayed_step, 1);
+    assert_eq!(
+        fs::read_to_string(uri_repro.join("src/app.rs")).unwrap(),
+        "pub fn run() -> &'static str { \"v2_good_flask-restful-architecture-blueprint\" }"
+    );
+}

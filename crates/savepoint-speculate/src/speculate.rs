@@ -25,7 +25,7 @@ impl Default for ConvergencePolicy {
 pub struct SpeculationConfig {
     /// Optional explicit concurrency limit. When `None`, `ResourceGovernor` computes it automatically.
     pub max_concurrency: Option<usize>,
-    /// Estimated memory footprint per sandbox in MiB (default: 1024 MiB) used by `ResourceGovernor`.
+    /// Estimated memory footprint per sandbox in MiB (default: 4096 MiB = 4 GB per Master Plan) used by `ResourceGovernor`.
     pub estimated_mem_per_sandbox_mb: u64,
     /// Timeout per command inside each candidate sandbox (default: 120s).
     pub command_timeout: Option<Duration>,
@@ -33,16 +33,19 @@ pub struct SpeculationConfig {
     pub policy: ConvergencePolicy,
     /// Whether sandboxes share CARGO_TARGET_DIR / NPM_CONFIG_CACHE / PIP_CACHE_DIR.
     pub share_build_cache: bool,
+    /// Whether to block external network egress inside speculative sandboxes.
+    pub block_network_egress: bool,
 }
 
 impl Default for SpeculationConfig {
     fn default() -> Self {
         Self {
             max_concurrency: None,
-            estimated_mem_per_sandbox_mb: 1024,
+            estimated_mem_per_sandbox_mb: 4096,
             command_timeout: Some(Duration::from_secs(120)),
             policy: ConvergencePolicy::BestPassWins,
             share_build_cache: true,
+            block_network_egress: false,
         }
     }
 }
@@ -75,23 +78,24 @@ impl ResourceGovernor {
         4096
     }
 
-    /// Computes a safe parallel sandbox limit bounded by CPU cores, 50% physical RAM, and `candidate_count`.
+    /// Computes a safe parallel sandbox limit using the Master Plan formula:
+    /// `Max Sandboxes = min(floor(RAM_MB / estimated_mem_per_sandbox_mb), Cores / 2, 3)`
     pub fn recommended_concurrency(
         estimated_mem_per_sandbox_mb: u64,
         candidate_count: usize,
     ) -> usize {
         let cores = Self::detect_cpu_cores();
-        let cpu_limit = if cores <= 2 { cores } else { (cores / 2).max(2) };
+        let cpu_limit = (cores / 2).max(1);
 
         let total_mem_mb = Self::detect_total_memory_mb();
-        let usable_mem_mb = (total_mem_mb / 2).max(256);
-        let per_sb = estimated_mem_per_sandbox_mb.max(128);
-        let mem_limit = (usable_mem_mb / per_sb).max(1) as usize;
+        let per_sb = estimated_mem_per_sandbox_mb.max(256);
+        let mem_limit = (total_mem_mb / per_sb).max(1) as usize;
 
         cpu_limit
             .min(mem_limit)
+            .min(3)
             .min(candidate_count.max(1))
-            .clamp(1, 8)
+            .clamp(1, 3)
     }
 }
 
@@ -232,6 +236,7 @@ impl SpeculativeEngine {
                     match evaluate_single_candidate(
                         workspace_root,
                         idx,
+                        concurrency,
                         candidate,
                         validation_cmd,
                         &config,
@@ -352,6 +357,7 @@ impl SpeculativeEngine {
 fn evaluate_single_candidate(
     workspace_root: &Path,
     idx: usize,
+    concurrency: usize,
     candidate: &SpeculativeCandidate,
     validation_cmd: &str,
     config: &SpeculationConfig,
@@ -360,6 +366,7 @@ fn evaluate_single_candidate(
     let start = Instant::now();
     let port_offset = (idx + 1) as u16;
     let sandbox_id = format!("spec_{}_{}", idx, sanitize_id(&candidate.name));
+    let build_jobs = (ResourceGovernor::detect_cpu_cores() / concurrency.max(1)).max(1);
 
     let sb_cfg = SandboxConfig {
         id: Some(sandbox_id),
@@ -367,6 +374,8 @@ fn evaluate_single_candidate(
         base_port: 3000,
         default_timeout: config.command_timeout,
         share_build_cache: config.share_build_cache,
+        block_network_egress: config.block_network_egress,
+        build_jobs_limit: Some(build_jobs),
         ..Default::default()
     };
 

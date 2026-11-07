@@ -155,3 +155,34 @@ fn test_rejects_malicious_sandbox_id_and_drains_large_output_without_deadlock() 
     assert_eq!(out.stdout.len(), 1024);
 }
 
+#[test]
+fn test_network_egress_guard_and_build_jobs_virtualization() {
+    let temp = tempfile::tempdir().unwrap();
+    let ws = temp.path();
+    fs::write(ws.join("lib.rs"), "").unwrap();
+
+    let cfg = SandboxConfig {
+        id: Some("egress_jobs_test".to_string()),
+        block_network_egress: true,
+        build_jobs_limit: Some(2),
+        ..Default::default()
+    };
+    let sandbox = Sandbox::create_with_config(ws, cfg).unwrap();
+    let out = sandbox
+        .run_command(
+            "sh",
+            &[
+                "-c",
+                "printf \"%s|%s|%s|%s\" \"$SAVEPOINT_OFFLINE_MODE\" \"$HTTPS_PROXY\" \"$CARGO_BUILD_JOBS\" \"$MAKEFLAGS\"",
+            ],
+        )
+        .unwrap();
+    assert_eq!(out.exit_code, 0);
+    let parts: Vec<&str> = out.stdout.split('|').collect();
+    assert_eq!(parts[0], "1");
+    assert_eq!(parts[1], "http://127.0.0.1:1");
+    assert_eq!(parts[2], "2");
+    assert!(parts[3].contains("-j2"));
+}
+
+

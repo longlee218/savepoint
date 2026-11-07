@@ -17,6 +17,8 @@ pub struct SandboxConfig {
     pub default_timeout: Option<Duration>,
     pub max_output_bytes: usize,
     pub share_build_cache: bool,
+    pub block_network_egress: bool,
+    pub build_jobs_limit: Option<usize>,
     pub extra_env: HashMap<String, String>,
 }
 
@@ -29,6 +31,8 @@ impl Default for SandboxConfig {
             default_timeout: Some(Duration::from_secs(300)),
             max_output_bytes: 2 * 1024 * 1024, // 2 MiB per stream
             share_build_cache: true,
+            block_network_egress: false,
+            build_jobs_limit: None,
             extra_env: HashMap::new(),
         }
     }
@@ -164,6 +168,31 @@ impl Sandbox {
             command.env("CARGO_TARGET_DIR", &cargo_target);
             command.env("NPM_CONFIG_CACHE", &npm_cache);
             command.env("PIP_CACHE_DIR", &pip_cache);
+
+            // Auto-wire sccache if installed on host and RUSTC_WRAPPER is not already set
+            if std::env::var_os("RUSTC_WRAPPER").is_none() && has_executable_in_path("sccache") {
+                command.env("RUSTC_WRAPPER", "sccache");
+            }
+        }
+
+        // Network Egress Guard (Side-Effect Shield)
+        if self.config.block_network_egress {
+            command.env("SAVEPOINT_OFFLINE_MODE", "1");
+            command.env("HTTP_PROXY", "http://127.0.0.1:1");
+            command.env("HTTPS_PROXY", "http://127.0.0.1:1");
+            command.env("ALL_PROXY", "http://127.0.0.1:1");
+            command.env("http_proxy", "http://127.0.0.1:1");
+            command.env("https_proxy", "http://127.0.0.1:1");
+            command.env("NO_PROXY", "localhost,127.0.0.1,::1");
+            command.env("no_proxy", "localhost,127.0.0.1,::1");
+        }
+
+        // Jobserver / Compiler Thread Governor per Sandbox
+        if let Some(jobs) = self.config.build_jobs_limit {
+            let clamped = jobs.max(1);
+            command.env("CARGO_BUILD_JOBS", clamped.to_string());
+            command.env("RAYON_NUM_THREADS", clamped.to_string());
+            command.env("MAKEFLAGS", format!("-j{}", clamped));
         }
 
         for (k, v) in &self.config.extra_env {
@@ -312,6 +341,13 @@ fn kill_process_group(pgid: i32) {
             let _ = libc::kill(-pgid, libc::SIGKILL);
         }
     }
+}
+
+fn has_executable_in_path(bin_name: &str) -> bool {
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path_var).any(|dir| dir.join(bin_name).is_file())
 }
 
 fn drain_bounded<R: Read>(pipe: Option<R>, max_bytes: usize) -> String {
