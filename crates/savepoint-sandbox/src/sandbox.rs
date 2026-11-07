@@ -70,10 +70,25 @@ impl Sandbox {
             source: e,
         })?;
 
-        let sandbox_id = config
-            .id
-            .clone()
-            .unwrap_or_else(|| format!("sb_{}", &Uuid::new_v4().simple().to_string()[..8]));
+        let sandbox_id = match &config.id {
+            Some(id) => {
+                if id.is_empty()
+                    || id.contains('/')
+                    || id.contains('\\')
+                    || id.contains("..")
+                    || !id
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                {
+                    return Err(SavepointError::Other(format!(
+                        "Invalid sandbox ID '{}': must be non-empty and contain only alphanumeric, '-', or '_' characters",
+                        id
+                    )));
+                }
+                id.clone()
+            }
+            None => format!("sb_{}", &Uuid::new_v4().simple().to_string()[..8]),
+        };
 
         let storage_root = ShadowEngine::resolve_storage_dir(&canonical_source);
         let sandbox_dir = storage_root.join("sandboxes").join(&sandbox_id);
@@ -182,6 +197,7 @@ impl Sandbox {
                     if let Some(limit) = timeout {
                         if start.elapsed() >= limit {
                             timed_out = true;
+                            let _ = child.kill();
                             kill_process_group(pgid);
                             let _ = child.wait();
                             break 124;
@@ -190,10 +206,13 @@ impl Sandbox {
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 Err(e) => {
+                    let _ = child.kill();
                     kill_process_group(pgid);
-                    if let Ok(mut guard) = self.active_pgids.lock() {
-                        guard.remove(&pgid);
-                    }
+                    let mut guard = match self.active_pgids.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    guard.remove(&pgid);
                     return Err(SavepointError::Other(format!(
                         "Error waiting for command '{}' in sandbox {:?}: {}",
                         cmd, self.path, e
@@ -204,7 +223,11 @@ impl Sandbox {
 
         // Always reap the entire process group so background daemons spawned by the command cannot leak
         kill_process_group(pgid);
-        if let Ok(mut guard) = self.active_pgids.lock() {
+        {
+            let mut guard = match self.active_pgids.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             guard.remove(&pgid);
         }
 
@@ -262,12 +285,14 @@ impl Sandbox {
     }
 
     fn reap_all_pgids(&self) {
-        if let Ok(mut guard) = self.active_pgids.lock() {
-            for &pgid in guard.iter() {
-                kill_process_group(pgid);
-            }
-            guard.clear();
+        let mut guard = match self.active_pgids.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for &pgid in guard.iter() {
+            kill_process_group(pgid);
         }
+        guard.clear();
     }
 }
 

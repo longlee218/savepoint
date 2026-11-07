@@ -127,3 +127,31 @@ fn test_promote_to_workspace_uses_cow_and_handles_collapsed_node_modules() {
     );
     assert!(ws.join("node_modules/lodash/index.js").exists());
 }
+
+#[test]
+fn test_rejects_malicious_sandbox_id_and_drains_large_output_without_deadlock() {
+    let temp = tempfile::tempdir().unwrap();
+    let ws = temp.path();
+    fs::write(ws.join("a.txt"), "ok").unwrap();
+
+    // 1. Path traversal / invalid sandbox IDs must be rejected
+    for bad_id in ["../evil", "/tmp/evil", "foo/bar", "", ".."] {
+        let res = Sandbox::create(ws, Some(bad_id));
+        assert!(res.is_err(), "Expected sandbox ID '{}' to be rejected", bad_id);
+    }
+
+    // 2. Output exceeding OS pipe buffer (128 KiB) with max_output_bytes = 1024 must not deadlock
+    let cfg = SandboxConfig {
+        id: Some("bounded_output_test".to_string()),
+        max_output_bytes: 1024,
+        ..Default::default()
+    };
+    let sandbox = Sandbox::create_with_config(ws, cfg).unwrap();
+    // Generate ~100,000 bytes of stdout
+    let out = sandbox
+        .run_command("sh", &["-c", "yes '0123456789abcdef' | head -n 6000"])
+        .unwrap();
+    assert_eq!(out.exit_code, 0);
+    assert_eq!(out.stdout.len(), 1024);
+}
+
