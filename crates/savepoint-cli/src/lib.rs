@@ -4,8 +4,11 @@ use std::io::{stdout, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use savepoint_core::ChangeKind;
-use savepoint_fs::ShadowEngine;
+use savepoint_fs::{FlightRecorder, ShadowEngine};
+use savepoint_mcp::protocol::JsonRpcRequest;
+use savepoint_mcp::McpHandler;
 use savepoint_pty::{PtySupervisor, RawTerminalGuard, SupervisorEvent};
+use savepoint_speculate::{SpeculativeCandidate, SpeculativeEngine};
 use savepoint_tui::{run_timeline, TimelineAction};
 
 #[derive(Parser)]
@@ -72,6 +75,68 @@ pub enum Commands {
     },
     /// Show file deltas since previous checkpoint
     Diff {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Fork a new speculative branch from the current checkpoint
+    Fork {
+        /// Name of the new branch
+        branch: String,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// List all branches in the active transaction
+    #[command(alias = "branch")]
+    Branches {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Switch workspace to a specific branch
+    Switch {
+        /// Name of branch to switch to
+        branch: String,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Merge a speculative branch into another branch
+    Merge {
+        /// Source branch to merge from
+        source: String,
+        /// Target branch to merge into (default: active branch)
+        #[arg(short, long)]
+        target: Option<String>,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Run multi-branch speculative execution across isolated CoW sandboxes
+    Speculate {
+        /// JSON string or file path containing candidate branches and setup commands
+        #[arg(short, long)]
+        candidates: String,
+        /// Verification command (e.g. 'cargo test', 'npm test')
+        #[arg(short, long)]
+        validation: String,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Start the Model Context Protocol (MCP) JSON-RPC stdio server for AI agents
+    Mcp,
+    /// Export a secret-scrubbed portable .spbundle Flight Recorder file for bug reproduction
+    Share {
+        /// Output .spbundle path
+        #[arg(short, long, default_value = "savepoint.spbundle")]
+        output: PathBuf,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Replay a .spbundle Flight Recorder file into a target directory at a specific step
+    Replay {
+        /// Path to the .spbundle file
+        bundle: PathBuf,
+        /// Checkpoint step index to replay (defaults to active step in bundle)
+        #[arg(short, long)]
+        step: Option<usize>,
+        /// Target directory to replay into
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -327,13 +392,15 @@ pub fn run_cli() -> anyhow::Result<()> {
 
             println!("\x1b[1m=== Savepoint Transaction: {} ===\x1b[0m", tx.id);
             println!("Status    : {:?}", tx.status);
+            println!("Branch    : \x1b[32m* {}\x1b[0m (All: {})", tx.active_branch, tx.branch_names().join(", "));
             println!("Workspace : {:?}", tx.workspace_root);
             println!("Timeline  : {} checkpoints", tx.checkpoints.len());
 
             for cp in &tx.checkpoints {
                 println!(
-                    "  \x1b[36m[Step #{}]\x1b[0m {} | {} deltas",
+                    "  \x1b[36m[Step #{}]\x1b[0m [{}] {} | {} deltas",
                     cp.step_index,
+                    cp.branch,
                     cp.prompt.as_deref().unwrap_or("No description"),
                     cp.deltas.len()
                 );
@@ -397,6 +464,140 @@ pub fn run_cli() -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+        Commands::Fork { branch, path } => {
+            let mut tx = match ShadowEngine::load_active_transaction(&path)? {
+                Some(tx) => tx,
+                None => {
+                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    return Ok(());
+                }
+            };
+            let start = Instant::now();
+            ShadowEngine::fork_branch(&mut tx, &branch)?;
+            println!("\x1b[32m✔ [Savepoint]\x1b[0m Forked new branch \x1b[1m'{}'\x1b[0m from Step #{} in \x1b[36m{:?}\x1b[0m", branch, tx.active_step(), start.elapsed());
+        }
+        Commands::Branches { path } => {
+            let tx = match ShadowEngine::load_active_transaction(&path)? {
+                Some(tx) => tx,
+                None => {
+                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    return Ok(());
+                }
+            };
+            println!("\x1b[1m=== Branches in Transaction {} ===\x1b[0m", tx.id);
+            for b in tx.branch_names() {
+                if b == tx.active_branch {
+                    println!("  \x1b[32m* {} (HEAD -> step #{})\x1b[0m", b, tx.branches.get(&b).unwrap_or(&0));
+                } else {
+                    println!("    {} (step #{})", b, tx.branches.get(&b).unwrap_or(&0));
+                }
+            }
+        }
+        Commands::Switch { branch, path } => {
+            let mut tx = match ShadowEngine::load_active_transaction(&path)? {
+                Some(tx) => tx,
+                None => {
+                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    return Ok(());
+                }
+            };
+            let start = Instant::now();
+            let step = ShadowEngine::switch_branch(&mut tx, &branch)?;
+            println!("\x1b[32m✔ [Savepoint]\x1b[0m Switched to branch \x1b[1m'{}'\x1b[0m (Step #{}) in \x1b[36m{:?}\x1b[0m", branch, step, start.elapsed());
+        }
+        Commands::Merge { source, target, path } => {
+            let mut tx = match ShadowEngine::load_active_transaction(&path)? {
+                Some(tx) => tx,
+                None => {
+                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    return Ok(());
+                }
+            };
+            let target_branch = target.unwrap_or_else(|| tx.active_branch.clone());
+            let start = Instant::now();
+            let cp = ShadowEngine::merge_branch(&mut tx, &source, &target_branch)?;
+            println!("\x1b[32m✔ [Savepoint]\x1b[0m Merged branch \x1b[1m'{}'\x1b[0m into \x1b[1m'{}'\x1b[0m at Checkpoint #{} in \x1b[36m{:?}\x1b[0m", source, target_branch, cp.step_index, start.elapsed());
+        }
+        Commands::Speculate { candidates, validation, path } => {
+            let candidates_data = if candidates.trim().starts_with('[') {
+                candidates
+            } else {
+                fs::read_to_string(&candidates)?
+            };
+            let parsed_candidates: Vec<SpeculativeCandidate> = serde_json::from_str(&candidates_data)?;
+            let start = Instant::now();
+            let summary = SpeculativeEngine::evaluate_and_converge(&path, parsed_candidates, &validation)?;
+            println!("\x1b[1m=== Savepoint Speculative Execution Engine ===\x1b[0m");
+            println!("Candidates evaluated: {}", summary.total_candidates);
+            println!("Total time          : {:?}", start.elapsed());
+            match summary.winner_branch {
+                Some(winner) => {
+                    println!("\x1b[32m✔ Winner Branch: '{}' passed validation and was atomically promoted to workspace!\x1b[0m", winner);
+                }
+                None => {
+                    println!("\x1b[31m✖ All speculative candidates failed validation. Workspace left 100% pristine.\x1b[0m");
+                }
+            }
+            for rep in &summary.candidate_reports {
+                let status_icon = if rep.passed { "\x1b[32m✔ PASS\x1b[0m" } else { "\x1b[31m✖ FAIL\x1b[0m" };
+                println!("  {} [{}] in {:?} (modified {} files)", status_icon, rep.branch_name, Duration::from_millis(rep.duration_ms as u64), rep.modified_files_count);
+            }
+        }
+        Commands::Mcp => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+                let stdin = tokio::io::stdin();
+                let mut stdout = tokio::io::stdout();
+                let reader = BufReader::new(stdin);
+                let mut lines = reader.lines();
+
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Ok(req) = serde_json::from_str::<JsonRpcRequest>(trimmed) {
+                        if let Some(resp) = McpHandler::handle_request(req) {
+                            if let Ok(serialized) = serde_json::to_string(&resp) {
+                                let _ = stdout.write_all(serialized.as_bytes()).await;
+                                let _ = stdout.write_all(b"\n").await;
+                                let _ = stdout.flush().await;
+                            }
+                        }
+                    }
+                }
+                Ok::<(), anyhow::Error>(())
+            })?;
+        }
+        Commands::Share { output, path } => {
+            let start = Instant::now();
+            let stats = FlightRecorder::export_bundle(&path, &output)?;
+            println!(
+                "\x1b[32m✔ [Savepoint]\x1b[0m 📦 Exported Flight Recorder bundle to \x1b[1m{:?}\x1b[0m in \x1b[36m{:?}\x1b[0m",
+                stats.output_path,
+                start.elapsed()
+            );
+            println!("  Transaction    : {}", stats.transaction_id);
+            println!("  Checkpoints    : {}", stats.checkpoints_count);
+            println!("  Tracked files  : {}", stats.tracked_files_count);
+            println!(
+                "  Secret Shield  : {} sensitive file(s) excluded, {} inline token(s) redacted",
+                stats.scrubbed_files_count, stats.scrubbed_secrets_count
+            );
+        }
+        Commands::Replay { bundle, step, path } => {
+            let start = Instant::now();
+            let stats = FlightRecorder::replay_bundle(&bundle, &path, step)?;
+            println!(
+                "\x1b[32m✔ [Savepoint]\x1b[0m ⏪ Replayed bundle \x1b[1m{}\x1b[0m (Step #{}) into \x1b[1m{:?}\x1b[0m in \x1b[36m{:?}\x1b[0m ({} files restored)",
+                stats.transaction_id,
+                stats.replayed_step,
+                path,
+                start.elapsed(),
+                stats.restored_files_count
+            );
         }
     }
 

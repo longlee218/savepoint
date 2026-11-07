@@ -8,8 +8,13 @@ license.workspace = true
 [dependencies]
 savepoint-core = { path = "../savepoint-core" }
 savepoint-fs = { path = "../savepoint-fs" }
+savepoint-sandbox = { path = "../savepoint-sandbox" }
+savepoint-speculate = { path = "../savepoint-speculate" }
+savepoint-mcp = { path = "../savepoint-mcp" }
 savepoint-pty = { path = "../savepoint-pty" }
 savepoint-tui = { path = "../savepoint-tui" }
+tokio.workspace = true
+serde_json.workspace = true
 crossterm.workspace = true
 clap.workspace = true
 anyhow.workspace = true

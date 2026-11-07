@@ -329,6 +329,51 @@ impl ShadowEngine {
         Ok(active_tx)
     }
 
+    /// Loads the active transaction if present, or falls back to the most recently created transaction
+    /// (including `Committed` transactions) so `sp share` / `FlightRecorder::export_bundle` can export
+    /// right after a session finishes.
+    pub fn load_latest_transaction(workspace_root: &Path) -> Result<Option<Transaction>> {
+        if let Some(active) = Self::load_active_transaction(workspace_root)? {
+            return Ok(Some(active));
+        }
+
+        let ws = workspace_root.canonicalize().map_err(|e| SavepointError::Io {
+            path: workspace_root.to_path_buf(),
+            source: e,
+        })?;
+        let ws_storage = Self::resolve_storage_dir(&ws);
+        let tx_base = ws_storage.join("transactions");
+        if !tx_base.exists() {
+            return Ok(None);
+        }
+
+        let mut latest_tx: Option<Transaction> = None;
+        for entry in fs::read_dir(&tx_base).map_err(|e| SavepointError::Io {
+            path: tx_base.clone(),
+            source: e,
+        })? {
+            let entry = entry.map_err(|e| SavepointError::Other(e.to_string()))?;
+            let meta_file = entry.path().join("meta.json");
+            if meta_file.exists() {
+                if let Ok(content) = fs::read_to_string(&meta_file) {
+                    if let Ok(tx) = serde_json::from_str::<Transaction>(&content) {
+                        match &latest_tx {
+                            Some(curr) if tx.created_at > curr.created_at => {
+                                latest_tx = Some(tx);
+                            }
+                            None => {
+                                latest_tx = Some(tx);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(latest_tx)
+    }
+
     fn save_metadata(tx: &Transaction) -> Result<()> {
         let meta_path = tx.shadow_root.join("meta.json");
         let json = serde_json::to_string_pretty(tx)?;

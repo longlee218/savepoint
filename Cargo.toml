@@ -2,6 +2,9 @@
 members = [
     "crates/savepoint-core",
     "crates/savepoint-fs",
+    "crates/savepoint-sandbox",
+    "crates/savepoint-speculate",
+    "crates/savepoint-mcp",
     "crates/savepoint-pty",
     "crates/savepoint-tui",
     "crates/savepoint-cli",
