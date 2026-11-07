@@ -286,13 +286,27 @@ impl McpHandler {
                     .ok_or("Missing 'validation_cmd'")?;
 
                 let policy = match args.get("policy").and_then(|p| p.as_str()) {
+                    None | Some("best_pass_wins") => ConvergencePolicy::BestPassWins,
                     Some("first_pass_wins") => ConvergencePolicy::FirstPassWins,
-                    _ => ConvergencePolicy::BestPassWins,
+                    Some(other) => {
+                        return Err(format!(
+                            "Invalid policy '{}': expected 'best_pass_wins' or 'first_pass_wins'",
+                            other
+                        ));
+                    }
                 };
-                let max_concurrency = args
-                    .get("max_concurrency")
-                    .and_then(|c| c.as_u64())
-                    .map(|c| c as usize);
+                let max_concurrency = match args.get("max_concurrency") {
+                    None => None,
+                    Some(v) => {
+                        let c = v
+                            .as_u64()
+                            .ok_or_else(|| "Invalid 'max_concurrency': expected positive integer".to_string())?;
+                        if c == 0 {
+                            return Err("Invalid 'max_concurrency': must be >= 1".to_string());
+                        }
+                        Some(c as usize)
+                    }
+                };
 
                 let cfg = SpeculationConfig {
                     policy,

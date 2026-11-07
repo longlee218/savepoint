@@ -98,4 +98,28 @@ fn test_mcp_tools_lifecycle_and_bundle_export_replay() {
         fs::read_to_string(repro.join("code.txt")).unwrap().trim(),
         "v1"
     );
+
+    // 6. Invalid policy or max_concurrency = 0 must return an error response
+    let bad_policy_req = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(6)),
+        method: "tools/call".to_string(),
+        params: Some(json!({
+            "name": "savepoint_speculate",
+            "arguments": {
+                "path": ws.to_string_lossy(),
+                "policy": "invalid_policy_name",
+                "validation_cmd": "true",
+                "candidates": [
+                    { "name": "c1", "setup_commands": ["true"] }
+                ]
+            }
+        })),
+    };
+    let bad_policy_resp = McpHandler::handle_request(bad_policy_req).unwrap();
+    assert!(
+        bad_policy_resp.error.is_some(),
+        "Expected invalid policy to return JSON-RPC error"
+    );
 }
+

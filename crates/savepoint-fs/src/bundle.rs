@@ -213,7 +213,24 @@ impl FlightRecorder {
         for (rel_str, state) in files_map {
             let rel_path = Path::new(rel_str);
             validate_safe_relative_path(rel_path)?;
+            ensure_no_symlink_ancestors(target_workspace, rel_path)?;
             let dest = target_workspace.join(rel_path);
+
+            // Always remove any existing file, symlink, or directory at dest before writing or deleting
+            // so we never follow an existing symlink or fail on read-only target files.
+            if let Ok(meta) = dest.symlink_metadata() {
+                if meta.is_dir() && !meta.file_type().is_symlink() {
+                    fs::remove_dir_all(&dest).map_err(|e| SavepointError::Io {
+                        path: dest.clone(),
+                        source: e,
+                    })?;
+                } else {
+                    fs::remove_file(&dest).map_err(|e| SavepointError::Io {
+                        path: dest.clone(),
+                        source: e,
+                    })?;
+                }
+            }
 
             match state {
                 BundleFileState::Present { content, is_hex } => {
@@ -234,11 +251,7 @@ impl FlightRecorder {
                     })?;
                     restored_files_count += 1;
                 }
-                BundleFileState::Deleted => {
-                    if dest.symlink_metadata().is_ok() {
-                        let _ = fs::remove_file(&dest);
-                    }
-                }
+                BundleFileState::Deleted => {}
             }
         }
 
@@ -265,6 +278,24 @@ fn validate_safe_relative_path(rel: &Path) -> Result<()> {
                     "Path traversal segment rejected in bundle path: {:?}",
                     rel
                 )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_no_symlink_ancestors(target_workspace: &Path, rel: &Path) -> Result<()> {
+    let mut cur = target_workspace.to_path_buf();
+    if let Some(parent) = rel.parent() {
+        for comp in parent.components() {
+            cur.push(comp);
+            if let Ok(meta) = cur.symlink_metadata() {
+                if meta.file_type().is_symlink() {
+                    return Err(SavepointError::Other(format!(
+                        "Refusing to traverse symlinked directory during bundle replay: {:?}",
+                        cur
+                    )));
+                }
             }
         }
     }

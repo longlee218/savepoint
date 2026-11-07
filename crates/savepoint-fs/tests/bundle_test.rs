@@ -91,4 +91,25 @@ fn test_flight_recorder_export_scrubs_secrets_and_replays_step_accurately() {
         fs::read_to_string(repro.join("src/app.rs")).unwrap(),
         "pub fn run() -> &'static str { \"v3_buggy\" }"
     );
+
+    // Symlink escape guard: if repro/src/app.rs is replaced with a symlink pointing outside repro,
+    // replay_bundle must NOT follow the symlink to overwrite the external target!
+    let external_victim = temp.path().join("external_victim.txt");
+    fs::write(&external_victim, "DO_NOT_TOUCH").unwrap();
+    fs::remove_file(repro.join("src/app.rs")).unwrap();
+    std::os::unix::fs::symlink(&external_victim, repro.join("src/app.rs")).unwrap();
+
+    FlightRecorder::replay_bundle(&bundle_path, &repro, Some(1)).unwrap();
+    assert_eq!(
+        fs::read_to_string(&external_victim).unwrap(),
+        "DO_NOT_TOUCH",
+        "replay_bundle followed a symlink and overwrote an external file!"
+    );
+    assert!(!repro
+        .join("src/app.rs")
+        .symlink_metadata()
+        .unwrap()
+        .file_type()
+        .is_symlink());
 }
+
