@@ -182,12 +182,16 @@ impl SpeculativeEngine {
 
         let next_idx = AtomicUsize::new(0);
         let winner_found = AtomicBool::new(false);
+        let has_error = AtomicBool::new(false);
         let outcomes: Mutex<Vec<WorkerOutcome>> = Mutex::new(Vec::with_capacity(total_candidates));
         let first_err: Mutex<Option<SavepointError>> = Mutex::new(None);
 
         std::thread::scope(|s| {
             for _ in 0..concurrency {
                 s.spawn(|| loop {
+                    if has_error.load(Ordering::SeqCst) {
+                        break;
+                    }
                     let idx = next_idx.fetch_add(1, Ordering::SeqCst);
                     if idx >= total_candidates {
                         break;
@@ -241,6 +245,7 @@ impl SpeculativeEngine {
                             guard.push(outcome);
                         }
                         Err(e) => {
+                            has_error.store(true, Ordering::SeqCst);
                             let mut err_guard = match first_err.lock() {
                                 Ok(g) => g,
                                 Err(p) => p.into_inner(),
@@ -365,15 +370,24 @@ fn evaluate_single_candidate(
         ..Default::default()
     };
 
-    let mut sandbox = Sandbox::create_with_config(workspace_root, sb_cfg)?;
-    sandbox.auto_cleanup = false;
+    // Keep auto_cleanup = true so RAII Drop cleans up the sandbox directory on any early error/unwind!
+    let sandbox = Sandbox::create_with_config(workspace_root, sb_cfg)?;
 
     let mut setup_ok = true;
+    let mut skipped_mid_flight = false;
     let mut timed_out = false;
     let mut failure_msg = String::new();
     let mut setup_exit = 0;
 
     for cmd_str in &candidate.setup_commands {
+        if config.policy == ConvergencePolicy::FirstPassWins && winner_found.load(Ordering::SeqCst)
+        {
+            setup_ok = false;
+            skipped_mid_flight = true;
+            setup_exit = -1;
+            failure_msg = "Aborted mid-flight: another candidate already passed validation".to_string();
+            break;
+        }
         let output = sandbox.run_command("sh", &["-c", cmd_str])?;
         if output.timed_out {
             setup_ok = false;
@@ -391,6 +405,16 @@ fn evaluate_single_candidate(
             );
             break;
         }
+    }
+
+    if setup_ok
+        && config.policy == ConvergencePolicy::FirstPassWins
+        && winner_found.load(Ordering::SeqCst)
+    {
+        setup_ok = false;
+        skipped_mid_flight = true;
+        setup_exit = -1;
+        failure_msg = "Aborted before validation: another candidate already passed".to_string();
     }
 
     let (passed, exit_code, stdout, stderr, val_timed_out) = if setup_ok {
@@ -416,7 +440,7 @@ fn evaluate_single_candidate(
     let report = CandidateReport {
         branch_name: candidate.name.clone(),
         passed,
-        skipped: false,
+        skipped: skipped_mid_flight,
         timed_out: timed_out || val_timed_out,
         exit_code,
         duration_ms,

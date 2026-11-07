@@ -194,3 +194,67 @@ fn test_resource_governor_bounds_concurrency() {
     let constrained = ResourceGovernor::recommended_concurrency(10_000_000, 10);
     assert_eq!(constrained, 1);
 }
+
+#[test]
+fn test_first_pass_wins_aborts_mid_flight_before_validation_and_leaves_zero_orphan_sandboxes() {
+    let ws_dir = tempdir().unwrap();
+    let ws_path = ws_dir.path();
+    fs::write(ws_path.join("marker.txt"), "initial").unwrap();
+
+    // Candidate 0 has a 200ms setup step, then would run a 10-second validation command
+    // unless FirstPassWins checks winner_found between setup and validation!
+    let cand_0 = SpeculativeCandidate {
+        name: "slow setup / slash & space!".to_string(),
+        description: None,
+        setup_commands: vec![
+            "sleep 0.25".to_string(),
+            "echo 'cand0' > marker.txt".to_string(),
+        ],
+    };
+    // Candidate 1 finishes setup in 10ms and passes validation immediately
+    let cand_1 = SpeculativeCandidate {
+        name: "fast/winner:branch".to_string(),
+        description: None,
+        setup_commands: vec!["echo 'cand1' > marker.txt".to_string()],
+    };
+
+    let cfg = SpeculationConfig {
+        max_concurrency: Some(2),
+        policy: ConvergencePolicy::FirstPassWins,
+        command_timeout: Some(Duration::from_secs(10)),
+        ..Default::default()
+    };
+
+    // Validation sleeps 5s if marker.txt == cand0, or exits 0 immediately if marker.txt == cand1
+    let summary = SpeculativeEngine::evaluate_with_config(
+        ws_path,
+        vec![cand_0, cand_1],
+        "if grep -q 'cand0' marker.txt; then sleep 5; fi",
+        cfg,
+    )
+    .unwrap();
+
+    assert_eq!(
+        summary.winner_branch,
+        Some("fast/winner:branch".to_string())
+    );
+    // Because cand_0 checks winner_found after its 250ms setup, it must skip the 5s validation!
+    assert!(
+        summary.total_duration_ms < 1500,
+        "Expected mid-flight abort before 5s validation, took {}ms",
+        summary.total_duration_ms
+    );
+    assert!(summary.candidate_reports[0].skipped);
+
+    // Verify zero orphan sandbox directories remain under <storage>/sandboxes
+    let sandboxes_dir = ShadowEngine::resolve_storage_dir(ws_path).join("sandboxes");
+    if sandboxes_dir.exists() {
+        let remaining: Vec<_> = fs::read_dir(&sandboxes_dir).unwrap().collect();
+        assert!(
+            remaining.is_empty(),
+            "Expected 0 leftover sandboxes, found: {:?}",
+            remaining
+        );
+    }
+}
+
