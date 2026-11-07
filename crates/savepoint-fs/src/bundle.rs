@@ -153,6 +153,13 @@ impl FlightRecorder {
         let checkpoints_count = tx.checkpoints.len();
         let transaction_id = tx.id.to_string();
 
+        // Redact local host absolute paths from exported Transaction metadata
+        tx.workspace_root = PathBuf::from(".");
+        tx.shadow_root = PathBuf::from(".savepoint");
+        for cp in &mut tx.checkpoints {
+            cp.snapshot_path = PathBuf::from(format!("snapshots/cp_{}", cp.step_index));
+        }
+
         let bundle = FlightBundle {
             format_version: "savepoint-bundle/v1".to_string(),
             created_at: Utc::now(),
@@ -341,17 +348,20 @@ fn scrub_secrets_in_text(input: &str) -> (String, usize) {
     while i < bytes.len() {
         let remaining = &input[i..];
         let mut matched_secret_len = None;
+        let is_word_boundary =
+            i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_' || bytes[i - 1] == b'-');
 
-        for &(prefix, min_tail_len) in PREFIXES {
-            if remaining.starts_with(prefix) {
-                let after_prefix = &remaining[prefix.len()..];
-                let tail_len = after_prefix
-                    .bytes()
-                    .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
-                    .count();
-                if tail_len >= min_tail_len {
-                    matched_secret_len = Some(prefix.len() + tail_len);
-                    break;
+        if is_word_boundary {
+            for &(prefix, min_tail_len) in PREFIXES {
+                if let Some(after_prefix) = remaining.strip_prefix(prefix) {
+                    let tail_len = after_prefix
+                        .bytes()
+                        .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
+                        .count();
+                    if tail_len >= min_tail_len {
+                        matched_secret_len = Some(prefix.len() + tail_len);
+                        break;
+                    }
                 }
             }
         }
@@ -379,8 +389,8 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(hex: &str) -> Result<Vec<u8>> {
-    if hex.len() % 2 != 0 {
-        return Err(SavepointError::Other("Invalid odd-length hex string in bundle".to_string()));
+    if !hex.is_ascii() || hex.len() % 2 != 0 {
+        return Err(SavepointError::Other("Invalid hex string in bundle".to_string()));
     }
     let mut out = Vec::with_capacity(hex.len() / 2);
     for i in (0..hex.len()).step_by(2) {

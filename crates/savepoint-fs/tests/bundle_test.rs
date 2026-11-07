@@ -23,9 +23,10 @@ fn test_flight_recorder_export_scrubs_secrets_and_replays_step_accurately() {
     let mut tx = ShadowEngine::begin_transaction(&ws).unwrap();
 
     // Step 1: valid feature + config file containing an accidental inline API token
+    // and a normal kebab-case identifier "flask-restful-architecture-blueprint" that ends in "sk-"
     fs::write(
         ws.join("src/app.rs"),
-        "pub fn run() -> &'static str { \"v2_good\" }",
+        "pub fn run() -> &'static str { \"v2_good_flask-restful-architecture-blueprint\" }",
     )
     .unwrap();
     fs::write(
@@ -69,13 +70,18 @@ fn test_flight_recorder_export_scrubs_secrets_and_replays_step_accurately() {
     assert!(!raw_bundle_json.contains("sk-proj9876543210abcdefghijklmnop"));
     assert!(!raw_bundle_json.contains("sk-inline1234567890abcdefgh"));
     assert!(raw_bundle_json.contains("[REDACTED_SECRET]"));
+    // False-positive check: "flask-restful-architecture-blueprint" must NOT be scrubbed!
+    assert!(
+        raw_bundle_json.contains("flask-restful-architecture-blueprint"),
+        "False positive secret scrub on 'flask-restful-architecture-blueprint'!"
+    );
 
     // Replay Step 1 into repro directory
     let replay1 = FlightRecorder::replay_bundle(&bundle_path, &repro, Some(1)).unwrap();
     assert_eq!(replay1.replayed_step, 1);
     assert_eq!(
         fs::read_to_string(repro.join("src/app.rs")).unwrap(),
-        "pub fn run() -> &'static str { \"v2_good\" }"
+        "pub fn run() -> &'static str { \"v2_good_flask-restful-architecture-blueprint\" }"
     );
     let restored_cfg = fs::read_to_string(repro.join("src/config.toml")).unwrap();
     assert!(restored_cfg.contains("[REDACTED_SECRET]"));
