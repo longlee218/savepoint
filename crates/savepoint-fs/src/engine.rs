@@ -61,10 +61,13 @@ impl ShadowEngine {
             prompt: Some("Baseline pristine workspace".to_string()),
             summary: None,
             deltas: Vec::new(),
+            branch: "main".to_string(),
+            parent_step: None,
+            content_hash: None,
         };
 
         let mut tx = Transaction::new(tx_id, ws, tx_dir);
-        tx.checkpoints.push(initial_cp);
+        tx.record_checkpoint_in_branch(initial_cp);
         Self::save_metadata(&tx)?;
 
         Ok(tx)
@@ -80,7 +83,7 @@ impl ShadowEngine {
             return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
         }
 
-        let next_step = tx.current_step();
+        let next_step = tx.next_step_index();
         let snapshots_dir = tx.shadow_root.join("snapshots");
         let current_cp_path = snapshots_dir.join(format!("cp_{}", next_step));
 
@@ -91,6 +94,8 @@ impl ShadowEngine {
         let base_cp = tx.active_checkpoint().or_else(|| tx.checkpoints.last()).ok_or_else(|| {
             SavepointError::Other("Transaction has no previous checkpoint".to_string())
         })?;
+        let parent_step = Some(base_cp.step_index);
+        let branch = tx.active_branch.clone();
         let deltas = compute_deltas(&base_cp.snapshot_path, &current_cp_path)?;
 
         let cp = Checkpoint {
@@ -100,13 +105,86 @@ impl ShadowEngine {
             prompt: prompt.map(|s| s.to_string()),
             summary: summary.map(|s| s.to_string()),
             deltas,
+            branch,
+            parent_step,
+            content_hash: None,
         };
 
-        tx.checkpoints.push(cp.clone());
-        tx.current_step_index = Some(next_step);
+        tx.record_checkpoint_in_branch(cp.clone());
         Self::save_metadata(tx)?;
 
         Ok(cp)
+    }
+
+    /// Creates a new branch pointing to the current active checkpoint.
+    pub fn fork_branch(tx: &mut Transaction, new_branch: &str) -> Result<()> {
+        if tx.status != TransactionStatus::Active {
+            return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
+        }
+        tx.fork_branch(new_branch)?;
+        Self::save_metadata(tx)?;
+        Ok(())
+    }
+
+    /// Switches the workspace to the head of the target branch.
+    pub fn switch_branch(tx: &mut Transaction, branch_name: &str) -> Result<usize> {
+        if tx.status != TransactionStatus::Active {
+            return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
+        }
+        let target_step = tx.switch_branch(branch_name)?;
+        Self::rewind(tx, target_step)?;
+        Ok(target_step)
+    }
+
+    /// Merges changes from source_branch into target_branch.
+    pub fn merge_branch(
+        tx: &mut Transaction,
+        source_branch: &str,
+        target_branch: &str,
+    ) -> Result<Checkpoint> {
+        if tx.status != TransactionStatus::Active {
+            return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
+        }
+        let src_head = tx.branch_head(source_branch).cloned().ok_or_else(|| {
+            SavepointError::BranchNotFound(source_branch.to_string())
+        })?;
+
+        // Switch to target branch if not active
+        if tx.active_branch != target_branch {
+            Self::switch_branch(tx, target_branch)?;
+        }
+
+        // Apply diff from current target workspace to source snapshot
+        let deltas = compute_deltas(&src_head.snapshot_path, &tx.workspace_root)?;
+        for delta in deltas {
+            let target_file_in_ws = tx.workspace_root.join(&delta.relative_path);
+            let snapshot_file = src_head.snapshot_path.join(&delta.relative_path);
+            match delta.kind {
+                ChangeKind::Created => {
+                    if target_file_in_ws.exists() {
+                        if target_file_in_ws.is_dir() {
+                            let _ = fs::remove_dir_all(&target_file_in_ws);
+                        } else {
+                            let _ = fs::remove_file(&target_file_in_ws);
+                        }
+                    }
+                }
+                ChangeKind::Modified | ChangeKind::Deleted => {
+                    if let Some(parent) = target_file_in_ws.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    if snapshot_file.exists() {
+                        fs::copy(&snapshot_file, &target_file_in_ws).map_err(|e| SavepointError::Io {
+                            path: target_file_in_ws.clone(),
+                            source: e,
+                        })?;
+                    }
+                }
+            }
+        }
+
+        let summary = format!("Merged branch '{}' into '{}'", source_branch, target_branch);
+        Self::checkpoint(tx, Some(&summary), Some(&summary))
     }
 
     /// Rewinds or fast-forwards the workspace to `target_step` in milliseconds.

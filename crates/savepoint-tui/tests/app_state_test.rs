@@ -18,6 +18,9 @@ fn test_app_navigation_and_confirmation() {
             prompt: Some(format!("Step {}", i)),
             summary: None,
             deltas: Vec::new(),
+            branch: "main".to_string(),
+            parent_step: if i > 0 { Some(i - 1) } else { None },
+            content_hash: None,
         });
     }
 

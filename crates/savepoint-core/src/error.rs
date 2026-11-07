@@ -26,6 +26,15 @@ pub enum SavepointError {
     #[error("Checkpoint {0} not found in transaction {1}")]
     CheckpointNotFound(usize, String),
 
+    #[error("Branch '{0}' not found")]
+    BranchNotFound(String),
+
+    #[error("Branch '{0}' already exists")]
+    BranchAlreadyExists(String),
+
+    #[error("Speculative execution failed: {0}")]
+    SpeculationFailed(String),
+
     #[error("Workspace path {0:?} is invalid or does not exist")]
     InvalidWorkspace(PathBuf),
 

@@ -29,10 +29,19 @@ fn test_transaction_serialization_roundtrip() {
         prompt: Some("Refactor authentication".to_string()),
         summary: Some("Updated JWT handler".to_string()),
         deltas: vec![delta],
+        branch: "main".to_string(),
+        parent_step: Some(0),
+        content_hash: None,
     };
 
-    tx.checkpoints.push(cp);
+    tx.record_checkpoint_in_branch(cp);
     assert_eq!(tx.current_step(), 1);
+    assert_eq!(tx.active_branch, "main");
+
+    // Test Forking branch
+    tx.fork_branch("experiment").expect("Must fork branch");
+    assert_eq!(tx.active_branch, "experiment");
+    assert_eq!(tx.branch_names(), vec!["experiment", "main"]);
 
     // Test JSON Serialization
     let json = serde_json::to_string_pretty(&tx).expect("Must serialize transaction");
@@ -41,4 +50,6 @@ fn test_transaction_serialization_roundtrip() {
     assert_eq!(deserialized.id, tx_id);
     assert_eq!(deserialized.checkpoints.len(), 1);
     assert_eq!(deserialized.checkpoints[0].deltas[0].kind, ChangeKind::Modified);
+    assert_eq!(deserialized.active_branch, "experiment");
+    assert_eq!(deserialized.branches.get("experiment"), Some(&1));
 }
