@@ -1983,6 +1983,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ece8e78b2f38ec51c51f5d475df0a7187ba5111b2a28bdc761ee05b075d40a71"
 
 [[package]]
+name = "savepoint-agent"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "savepoint-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "savepoint-cas"
 version = "0.1.0"
 dependencies = [
@@ -2005,6 +2019,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "savepoint-agent",
  "savepoint-core",
  "savepoint-fs",
  "savepoint-mcp",
@@ -2014,6 +2029,7 @@ dependencies = [
  "savepoint-state",
  "savepoint-tui",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

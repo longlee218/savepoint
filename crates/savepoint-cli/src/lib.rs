@@ -182,6 +182,35 @@ pub enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// View visual branching DAG of sub-agent and checkpoint exploration
+    Graph {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Manage multi-agent virtual session leases
+    Lease {
+        #[command(subcommand)]
+        subcommand: LeaseCommands,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LeaseCommands {
+    /// List active agent leases
+    #[command(alias = "ls")]
+    List,
+    /// Acquire a new virtual session lease for an agent
+    Acquire {
+        /// Agent identifier (e.g. agent_alpha)
+        agent_id: String,
+    },
+    /// Release an existing agent lease
+    Release {
+        /// Agent identifier
+        agent_id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -871,6 +900,89 @@ pub fn run_cli() -> anyhow::Result<()> {
                             Err(e) => println!("\x1b[31m[FAIL: {}]\x1b[0m", e),
                         }
                     }
+                }
+            }
+        }
+        Commands::Graph { path } => {
+            let tx = match ShadowEngine::load_active_transaction(&path)? {
+                Some(tx) => tx,
+                None => {
+                    println!("No active transaction found in {:?}.", path);
+                    return Ok(());
+                }
+            };
+
+            let mut graph = savepoint_agent::DagGraph::new();
+            graph.add_node(savepoint_agent::DagNode {
+                step: 0,
+                parent_step: None,
+                branch: "main".to_string(),
+                prompt: "Baseline workspace (Root)".to_string(),
+                is_active: tx.active_step() == 0,
+            });
+
+            for cp in &tx.checkpoints {
+                let parent = if cp.step_index > 0 { Some((cp.step_index - 1) as u64) } else { None };
+                let prompt_text = cp.prompt.as_deref().or(cp.summary.as_deref()).unwrap_or("");
+                graph.add_node(savepoint_agent::DagNode {
+                    step: cp.step_index as u64,
+                    parent_step: parent,
+                    branch: cp.branch.clone(),
+                    prompt: if prompt_text.is_empty() {
+                        format!("Checkpoint #{}", cp.step_index)
+                    } else {
+                        prompt_text.to_string()
+                    },
+                    is_active: cp.step_index == tx.active_step(),
+                });
+            }
+
+            println!("\x1b[1mSavepoint Exploration DAG:\x1b[0m");
+            println!("{}", graph.render_ascii());
+        }
+        Commands::Lease { subcommand, path } => {
+            let lease_dir = path.join(".sp").join("leases");
+            let manager = savepoint_agent::AgentLeaseManager::new(
+                &lease_dir,
+                savepoint_agent::LeaseConfig::default(),
+            );
+
+            match subcommand {
+                LeaseCommands::List => {
+                    let active = manager.list_active();
+                    if active.is_empty() {
+                        println!("No active agent leases in {:?}", lease_dir);
+                    } else {
+                        println!("Active agent leases ({}):", active.len());
+                        for lease in active {
+                            println!(
+                                "  - \x1b[36m{}\x1b[0m (Port: {}, DB: {}, Prefix: {}, Sandbox: {:?})",
+                                lease.agent_id,
+                                lease.port_offset,
+                                lease.db_namespace,
+                                lease.cache_prefix,
+                                lease.sandbox_dir
+                            );
+                        }
+                    }
+                }
+                LeaseCommands::Acquire { agent_id } => {
+                    let lease = manager.acquire(&agent_id)?;
+                    println!(
+                        "\x1b[32m[savepoint]\x1b[0m Acquired lease for agent \x1b[1m{}\x1b[0m:",
+                        lease.agent_id
+                    );
+                    println!("  Port:      {}", lease.port_offset);
+                    println!("  Database:  {}", lease.db_namespace);
+                    println!("  Cache:     {}", lease.cache_prefix);
+                    println!("  Sandbox:   {:?}", lease.sandbox_dir);
+                }
+                LeaseCommands::Release { agent_id } => {
+                    manager.release(&agent_id)?;
+                    println!(
+                        "\x1b[32m[savepoint]\x1b[0m Released lease for agent \x1b[1m{}\x1b[0m",
+                        agent_id
+                    );
                 }
             }
         }
