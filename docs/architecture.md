@@ -59,7 +59,7 @@ When agents run speculative commands or tests:
 ### 3. Speculative Multi-Branch Execution (`savepoint-speculate`)
 Enables running multiple model strategies or candidate patches concurrently:
 - **Resource Governor:** Dynamically throttles concurrency using system capacity:
-  $$\min\left(\lfloor \text{RAM\_GB} / 4 \rfloor, \lfloor \text{Cores} / 2 \rfloor, 3\right)$$
+  $$\min\left(\lfloor \text{RAM} / 4 \rfloor, \lfloor \text{Cores} / 2 \rfloor, 3\right)$$
 - **Dual Convergence:**
   - `FirstPassWins`: First candidate to pass validation cancels queued and mid-flight runners immediately.
   - `BestPassWins`: Evaluates all candidates and promotes the fastest, cleanest patch with the fewest changed files.

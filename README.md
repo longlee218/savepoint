@@ -126,7 +126,7 @@ Every command executes inside its own Unix Process Group (`PGID`). When a turn t
 ### 9. Multi-Branch Speculative Execution
 Give multiple models (Claude 3.7 vs DeepSeek vs GPT-4o) the same issue concurrently:
 - **Resource Governor:** Automatically throttles concurrency based on system RAM and CPU limits:
-  $$\min\left(\lfloor \text{RAM\_GB} / 4 \rfloor, \lfloor \text{Cores} / 2 \rfloor, 3\right)$$
+  $$\min\left(\lfloor \text{RAM} / 4 \rfloor, \lfloor \text{Cores} / 2 \rfloor, 3\right)$$
 - **Dual Convergence:** `FirstPassWins` immediately cancels slower runners; `BestPassWins` selects the fastest, cleanest passing patch.
 
 ### 10. Portable Bug Flight Recorder (`.spbundle`)
