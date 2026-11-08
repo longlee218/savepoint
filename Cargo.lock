@@ -2196,7 +2196,12 @@ dependencies = [
  "chrono",
  "crossterm",
  "ratatui",
+ "savepoint-agent",
+ "savepoint-cas",
  "savepoint-core",
+ "savepoint-egress",
+ "savepoint-state",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 

@@ -1,5 +1,6 @@
 use ratatui::{backend::TestBackend, Terminal};
 use savepoint_core::{ChangeKind, Checkpoint, FileDelta, Transaction, TransactionId};
+use savepoint_tui::app::AppTab;
 use savepoint_tui::ui::render_ui;
 use savepoint_tui::{TimelineAction, TimelineApp};
 use std::path::PathBuf;
@@ -94,6 +95,147 @@ fn test_quick_undo_request() {
 }
 
 #[test]
+fn test_tab_navigation_and_cycling() {
+    let tx = sample_transaction(2);
+    let mut app = TimelineApp::new(tx, Vec::new());
+
+    assert_eq!(app.active_tab, AppTab::Timeline);
+
+    // Test next_tab cycle through all 7 tabs
+    app.next_tab();
+    assert_eq!(app.active_tab, AppTab::DagGraph);
+    app.next_tab();
+    assert_eq!(app.active_tab, AppTab::StateProviders);
+    app.next_tab();
+    assert_eq!(app.active_tab, AppTab::AgentLeases);
+    app.next_tab();
+    assert_eq!(app.active_tab, AppTab::EgressSagas);
+    app.next_tab();
+    assert_eq!(app.active_tab, AppTab::CasStorage);
+    app.next_tab();
+    assert_eq!(app.active_tab, AppTab::Benchmarks);
+    app.next_tab();
+    assert_eq!(app.active_tab, AppTab::Timeline); // Cycles back!
+
+    // Test prev_tab cycle
+    app.prev_tab();
+    assert_eq!(app.active_tab, AppTab::Benchmarks);
+    app.prev_tab();
+    assert_eq!(app.active_tab, AppTab::CasStorage);
+
+    // Test direct set_tab
+    app.set_tab(AppTab::StateProviders);
+    assert_eq!(app.active_tab, AppTab::StateProviders);
+}
+
+#[test]
+fn test_all_seven_tabs_render_properly() {
+    let tx = sample_transaction(3);
+    let mut app = TimelineApp::new(tx, Vec::new());
+
+    let backend = TestBackend::new(120, 35);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    // Check Tab 1: Timeline
+    app.set_tab(AppTab::Timeline);
+    terminal.draw(|f| render_ui(f, &app)).unwrap();
+    let mut text = String::new();
+    let buf = terminal.backend().buffer();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            text.push_str(buf[(x, y)].symbol());
+        }
+        text.push('\n');
+    }
+    assert!(text.contains("TIMELINE"));
+    assert!(text.contains("INSPECTOR"));
+
+    // Check Tab 2: DAG Graph
+    app.set_tab(AppTab::DagGraph);
+    terminal.draw(|f| render_ui(f, &app)).unwrap();
+    let mut text = String::new();
+    let buf = terminal.backend().buffer();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            text.push_str(buf[(x, y)].symbol());
+        }
+        text.push('\n');
+    }
+    assert!(text.contains("DAG TOPOLOGY"));
+    assert!(text.contains("GRAPH ARCHITECTURE"));
+
+    // Check Tab 3: State Providers
+    app.set_tab(AppTab::StateProviders);
+    terminal.draw(|f| render_ui(f, &app)).unwrap();
+    let mut text = String::new();
+    let buf = terminal.backend().buffer();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            text.push_str(buf[(x, y)].symbol());
+        }
+        text.push('\n');
+    }
+    assert!(text.contains("EXTERNAL STATE HYPERVISOR"));
+    assert!(text.contains("PostgreSQL"));
+
+    // Check Tab 4: Agent Leases
+    app.set_tab(AppTab::AgentLeases);
+    terminal.draw(|f| render_ui(f, &app)).unwrap();
+    let mut text = String::new();
+    let buf = terminal.backend().buffer();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            text.push_str(buf[(x, y)].symbol());
+        }
+        text.push('\n');
+    }
+    assert!(text.contains("ACTIVE MULTI-AGENT VIRTUAL LEASES"));
+    assert!(text.contains("port-offset"));
+
+    // Check Tab 5: Egress & Sagas
+    app.set_tab(AppTab::EgressSagas);
+    terminal.draw(|f| render_ui(f, &app)).unwrap();
+    let mut text = String::new();
+    let buf = terminal.backend().buffer();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            text.push_str(buf[(x, y)].symbol());
+        }
+        text.push('\n');
+    }
+    assert!(text.contains("NETWORK HYPERVISOR & EGRESS CONTROL"));
+    assert!(text.contains("SAGA COMPENSATION REGISTRY"));
+
+    // Check Tab 6: Storage & CAS
+    app.set_tab(AppTab::CasStorage);
+    terminal.draw(|f| render_ui(f, &app)).unwrap();
+    let mut text = String::new();
+    let buf = terminal.backend().buffer();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            text.push_str(buf[(x, y)].symbol());
+        }
+        text.push('\n');
+    }
+    assert!(text.contains("STORAGE ARCHITECTURE"));
+    assert!(text.contains("FastCDC"));
+
+    // Check Tab 7: Benchmarks
+    app.set_tab(AppTab::Benchmarks);
+    terminal.draw(|f| render_ui(f, &app)).unwrap();
+    let mut text = String::new();
+    let buf = terminal.backend().buffer();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            text.push_str(buf[(x, y)].symbol());
+        }
+        text.push('\n');
+    }
+    assert!(text.contains("LIVE BENCHMARK METRICS"));
+    assert!(text.contains("APFS CoW Workspace Clone"));
+}
+
+#[test]
 fn test_ui_renders_clean_english_without_vietnamese_or_emoji_slop() {
     let tx = sample_transaction(4);
     let live_deltas = vec![FileDelta {
@@ -104,7 +246,7 @@ fn test_ui_renders_clean_english_without_vietnamese_or_emoji_slop() {
     }];
     let app = TimelineApp::new(tx, live_deltas);
 
-    let backend = TestBackend::new(110, 30);
+    let backend = TestBackend::new(120, 35);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| render_ui(f, &app)).unwrap();
 

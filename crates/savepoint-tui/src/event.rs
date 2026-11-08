@@ -1,4 +1,4 @@
-use crate::app::{TimelineAction, TimelineApp, ViewMode};
+use crate::app::{AppTab, TimelineAction, TimelineApp, ViewMode};
 use crate::ui::render_ui;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -90,6 +90,27 @@ fn run_loop<B: ratatui::backend::Backend>(
                             {
                                 app.cancel();
                             }
+                            // Tab switching
+                            KeyCode::Tab => app.next_tab(),
+                            KeyCode::BackTab => app.prev_tab(),
+                            KeyCode::Char('1') => app.set_tab(AppTab::Timeline),
+                            KeyCode::Char('2') => app.set_tab(AppTab::DagGraph),
+                            KeyCode::Char('3') => app.set_tab(AppTab::StateProviders),
+                            KeyCode::Char('4') => app.set_tab(AppTab::AgentLeases),
+                            KeyCode::Char('5') => app.set_tab(AppTab::EgressSagas),
+                            KeyCode::Char('6') => app.set_tab(AppTab::CasStorage),
+                            KeyCode::Char('7') => app.set_tab(AppTab::Benchmarks),
+                            KeyCode::Left | KeyCode::Char('h') if app.active_tab != AppTab::Timeline => {
+                                app.prev_tab();
+                            }
+                            KeyCode::Right | KeyCode::Char('l') if app.active_tab != AppTab::Timeline => {
+                                app.next_tab();
+                            }
+                            // State providers refresh
+                            KeyCode::Char('p') | KeyCode::Char('P') if app.active_tab == AppTab::StateProviders => {
+                                app.refresh_providers();
+                            }
+                            // Navigation within Timeline tab
                             KeyCode::Up | KeyCode::Char('k') => app.previous(),
                             KeyCode::Down | KeyCode::Char('j') => app.next(),
                             KeyCode::Home | KeyCode::Char('g') => app.first(),
