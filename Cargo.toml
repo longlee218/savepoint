@@ -5,6 +5,7 @@ members = [
     "crates/savepoint-state",
     "crates/savepoint-egress",
     "crates/savepoint-cas",
+    "crates/savepoint-git",
     "crates/savepoint-sandbox",
     "crates/savepoint-speculate",
     "crates/savepoint-mcp",
