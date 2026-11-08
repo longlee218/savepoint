@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 savepoint-core = { path = "../savepoint-core" }
 savepoint-fs = { path = "../savepoint-fs" }
+savepoint-state = { path = "../savepoint-state" }
 savepoint-sandbox = { path = "../savepoint-sandbox" }
 savepoint-speculate = { path = "../savepoint-speculate" }
 savepoint-mcp = { path = "../savepoint-mcp" }

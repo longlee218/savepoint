@@ -2,6 +2,7 @@
 members = [
     "crates/savepoint-core",
     "crates/savepoint-fs",
+    "crates/savepoint-state",
     "crates/savepoint-sandbox",
     "crates/savepoint-speculate",
     "crates/savepoint-mcp",
@@ -37,3 +38,4 @@ portable-pty = "0.8"
 crossterm = "0.28"
 ratatui = "0.28"
 serde_yaml = "0.9"
+ignore = "0.4"

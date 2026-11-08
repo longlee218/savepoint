@@ -175,6 +175,22 @@ pub enum Commands {
         #[command(subcommand)]
         target: HookTarget,
     },
+    /// Inspect or preflight external state providers (databases, caches, queues)
+    State {
+        #[command(subcommand)]
+        subcommand: StateCommands,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StateCommands {
+    /// List configured state providers from .sp-state.yaml
+    #[command(alias = "ls")]
+    List,
+    /// Test connectivity and preflight checks on all configured state providers
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -830,6 +846,33 @@ pub fn run_cli() -> anyhow::Result<()> {
                 start.elapsed(),
                 stats.restored_files_count
             );
+        }
+        Commands::State { subcommand, path } => {
+            let state_mgr = match savepoint_state::StateManager::load(&path)? {
+                Some(mgr) => mgr,
+                None => {
+                    println!("No .sp-state.yaml found in {:?}.", path);
+                    return Ok(());
+                }
+            };
+            match subcommand {
+                StateCommands::List => {
+                    println!("Configured state providers ({}):", state_mgr.providers().len());
+                    for p in state_mgr.providers() {
+                        println!("  - \x1b[36m{}\x1b[0m (kind: {:?})", p.name(), p.kind());
+                    }
+                }
+                StateCommands::Check => {
+                    println!("Preflighting {} state provider(s)...", state_mgr.providers().len());
+                    for p in state_mgr.providers() {
+                        print!("  - Checking {} ({:?})... ", p.name(), p.kind());
+                        match p.preflight() {
+                            Ok(_) => println!("\x1b[32m[PASS]\x1b[0m"),
+                            Err(e) => println!("\x1b[31m[FAIL: {}]\x1b[0m", e),
+                        }
+                    }
+                }
+            }
         }
     }
 

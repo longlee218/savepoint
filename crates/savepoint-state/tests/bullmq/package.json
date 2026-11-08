@@ -1,0 +1,9 @@
+{
+  "name": "bullmq-test-harness",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "bullmq": "^5.41.0",
+    "ioredis": "^5.4.1"
+  }
+}

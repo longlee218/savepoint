@@ -7,15 +7,18 @@ license.workspace = true
 
 [dependencies]
 savepoint-core = { path = "../savepoint-core" }
+savepoint-state = { path = "../savepoint-state" }
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 libc.workspace = true
 walkdir.workspace = true
+ignore.workspace = true
 sha2.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+rusqlite = { version = "0.41", features = ["bundled"] }

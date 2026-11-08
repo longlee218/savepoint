@@ -89,6 +89,16 @@ impl ShadowEngine {
         let cp0_path = snapshots_dir.join("cp_0");
         clone_workspace(&ws, &cp0_path)?;
 
+        let cp0_state_dir = tx_dir.join("state").join("cp_0");
+        if let Ok(Some(state_mgr)) = savepoint_state::StateManager::load(&ws) {
+            state_mgr
+                .preflight_all()
+                .map_err(|e| SavepointError::Other(e.to_string()))?;
+            state_mgr
+                .snapshot_all(&cp0_state_dir)
+                .map_err(|e| SavepointError::Other(e.to_string()))?;
+        }
+
         if let Some(h) = &hooks {
             let _ = crate::hooks::LifecycleHooks::run_hooks(
                 &ws,
@@ -151,6 +161,16 @@ impl ShadowEngine {
 
         // Take snapshot of current workspace state
         clone_workspace(&tx.workspace_root, &current_cp_path)?;
+
+        let state_dir = tx
+            .shadow_root
+            .join("state")
+            .join(format!("cp_{}", next_step));
+        if let Ok(Some(state_mgr)) = savepoint_state::StateManager::load(&tx.workspace_root) {
+            state_mgr
+                .snapshot_all(&state_dir)
+                .map_err(|e| SavepointError::Other(e.to_string()))?;
+        }
 
         // Compute deltas from the checkpoint the workspace was based on
         let base_cp = tx
@@ -299,6 +319,18 @@ impl ShadowEngine {
         // 2. Perform delta rollback / fast-forward to target_step via CoW:
         let deltas = compute_deltas(&target_cp.snapshot_path, &tx.workspace_root)?;
         apply_snapshot_deltas(&target_cp.snapshot_path, &tx.workspace_root, &deltas)?;
+
+        let target_state_dir = tx
+            .shadow_root
+            .join("state")
+            .join(format!("cp_{}", target_step));
+        if target_state_dir.exists() {
+            if let Ok(Some(state_mgr)) = savepoint_state::StateManager::load(&tx.workspace_root) {
+                state_mgr
+                    .restore_all(&target_state_dir)
+                    .map_err(|e| SavepointError::Other(e.to_string()))?;
+            }
+        }
 
         // 3. DO NOT PRUNE! Update current_step_index so the entire timeline remains intact!
         tx.current_step_index = Some(target_step);

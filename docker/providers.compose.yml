@@ -1,0 +1,90 @@
+# Isolated provider fleet for savepoint-state integration tests.
+#
+# Every service binds a non-default 5xxxx host port so it never collides with
+# a developer's own Postgres/MySQL/Redis/Memcached. Data lives in tmpfs, so
+# `down` leaves nothing behind.
+#
+#   docker compose -f docker/providers.compose.yml -p savepoint-providers up -d --wait
+#   source scripts/provider-env.sh
+#   cargo test -p savepoint-state -- --test-threads=1
+#   docker compose -f docker/providers.compose.yml -p savepoint-providers down -v
+
+services:
+  postgres16:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sp
+      POSTGRES_PASSWORD: sp
+      POSTGRES_DB: postgres
+    ports: ["127.0.0.1:55432:5432"]
+    tmpfs: ["/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sp -d postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  mysql84:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: sp
+    ports: ["127.0.0.1:53306:3306"]
+    tmpfs: ["/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -psp --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 90
+
+  mariadb11:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: sp
+    ports: ["127.0.0.1:53307:3306"]
+    tmpfs: ["/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      timeout: 3s
+      retries: 90
+
+  redis7:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:56379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  redis8:
+    image: redis:8.2
+    ports: ["127.0.0.1:56380:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  valkey8:
+    image: valkey/valkey:8-alpine
+    ports: ["127.0.0.1:56381:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  redis-stack:
+    image: redis/redis-stack:latest
+    ports: ["127.0.0.1:56382:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  memcached16:
+    image: memcached:1.6-alpine
+    command: ["memcached", "-m", "128", "-I", "2m"]
+    ports: ["127.0.0.1:51211:11211"]
