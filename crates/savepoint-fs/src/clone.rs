@@ -30,6 +30,8 @@ pub fn clone_workspace(workspace_root: &Path, snapshot_dir: &Path) -> Result<()>
         source: e,
     })?;
 
+    let ignore = crate::ignore::SavepointIgnore::for_workspace(workspace_root);
+
     for entry in fs::read_dir(workspace_root).map_err(|e| SavepointError::Io {
         path: workspace_root.to_path_buf(),
         source: e,
@@ -38,12 +40,12 @@ pub fn clone_workspace(workspace_root: &Path, snapshot_dir: &Path) -> Result<()>
             path: workspace_root.to_path_buf(),
             source: e,
         })?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str == ".git" || name_str == ".savepoint" {
+        let src_entry = entry.path();
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        if ignore.is_ignored(&src_entry, is_dir) {
             continue;
         }
-        let src_entry = entry.path();
+        let name = entry.file_name();
         let dst_entry = snapshot_dir.join(&name);
         clone_tree(&src_entry, &dst_entry)?;
     }

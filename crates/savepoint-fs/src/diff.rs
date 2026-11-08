@@ -1,22 +1,11 @@
+use crate::ignore::{SavepointIgnore, HEAVY_DEP_DIRS};
 use savepoint_core::{ChangeKind, FileDelta, Result, SavepointError};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use walkdir::{DirEntry, WalkDir};
-
-pub const HEAVY_CACHE_DIRS: &[&str] = &[
-    "target",
-    ".next",
-    "__pycache__",
-    ".gradle",
-    ".turbo",
-    ".cache",
-    ".sp-tmp",
-];
-
-pub const HEAVY_DEP_DIRS: &[&str] = &["node_modules", ".venv", "venv"];
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileStat {
@@ -29,6 +18,7 @@ struct FileStat {
 /// Computes file-level deltas between `base_dir` and `current_dir`.
 /// Uses a two-stage stat-first comparison and collapses `HEAVY_DEP_DIRS` into single directory deltas.
 pub fn compute_deltas(base_dir: &Path, current_dir: &Path) -> Result<Vec<FileDelta>> {
+    let ignore = SavepointIgnore::for_workspace(current_dir);
     let mut base_files: HashMap<PathBuf, FileStat> = HashMap::new();
     let mut deltas = Vec::new();
     let mut seen_in_current = HashSet::new();
@@ -38,7 +28,7 @@ pub fn compute_deltas(base_dir: &Path, current_dir: &Path) -> Result<Vec<FileDel
         for entry in WalkDir::new(base_dir)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !is_ignored_entry(e))
+            .filter_entry(|e| !ignore.is_entry_ignored(e, base_dir))
         {
             let entry = entry.map_err(|e| SavepointError::Other(e.to_string()))?;
             let ft = entry.file_type();
@@ -68,7 +58,7 @@ pub fn compute_deltas(base_dir: &Path, current_dir: &Path) -> Result<Vec<FileDel
         for entry in WalkDir::new(current_dir)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !is_ignored_entry(e))
+            .filter_entry(|e| !ignore.is_entry_ignored(e, current_dir))
         {
             let entry = entry.map_err(|e| SavepointError::Other(e.to_string()))?;
             let ft = entry.file_type();
@@ -139,9 +129,14 @@ pub fn compute_deltas(base_dir: &Path, current_dir: &Path) -> Result<Vec<FileDel
     }
 
     // 4. Check collapsed heavy dependency directories (node_modules, .venv, venv)
+    // Only if they are not explicitly ignored by .gitignore
     for &dep_dir in HEAVY_DEP_DIRS {
-        let base_dep = base_dir.join(dep_dir);
         let curr_dep = current_dir.join(dep_dir);
+        if ignore.is_ignored(&curr_dep, true) {
+            continue;
+        }
+
+        let base_dep = base_dir.join(dep_dir);
         let base_exists = base_dep.symlink_metadata().is_ok();
         let curr_exists = curr_dep.symlink_metadata().is_ok();
 
@@ -181,38 +176,47 @@ pub fn compute_deltas(base_dir: &Path, current_dir: &Path) -> Result<Vec<FileDel
     Ok(deltas)
 }
 
-fn is_ignored_entry(entry: &DirEntry) -> bool {
-    if entry.depth() == 0 {
-        return false;
-    }
-    let s = entry.file_name().to_string_lossy();
-    if s == ".savepoint" || s == ".git" || s == "__pycache__" || s == ".sp-tmp" {
-        return true;
-    }
-    // Root-level heavy dependency directories and build caches are only filtered at depth 1
-    // so legitimate nested source directories like `src/target` are preserved.
-    if entry.depth() == 1 && entry.file_type().is_dir() {
-        return HEAVY_CACHE_DIRS.contains(&s.as_ref()) || HEAVY_DEP_DIRS.contains(&s.as_ref());
-    }
-    false
-}
-
 fn heavy_dir_changed(base_dep: &Path, curr_dep: &Path) -> bool {
-    let (Ok(bm), Ok(cm)) = (base_dep.symlink_metadata(), curr_dep.symlink_metadata()) else {
-        return true;
+    let (_bm, _cm) = match (base_dep.symlink_metadata(), curr_dep.symlink_metadata()) {
+        (Ok(bm), Ok(cm)) => (bm, cm),
+        _ => return true,
     };
-    if bm.mtime() != cm.mtime() || bm.mtime_nsec() != cm.mtime_nsec() {
-        return true;
+
+    // Check if a lockfile exists in parent directory and differs
+    if let (Some(base_parent), Some(curr_parent)) = (base_dep.parent(), curr_dep.parent()) {
+        for lock in [
+            "package-lock.json",
+            "bun.lock",
+            "bun.lockb",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "poetry.lock",
+            "Cargo.lock",
+        ] {
+            let b_lock = base_parent.join(lock);
+            let c_lock = curr_parent.join(lock);
+            if b_lock.is_file() && c_lock.is_file() {
+                if let (Ok(bm), Ok(cm)) = (b_lock.metadata(), c_lock.metadata()) {
+                    if bm.len() != cm.len() || bm.modified().ok() != cm.modified().ok() {
+                        return true;
+                    }
+                }
+            }
+        }
     }
 
-    // Also inspect immediate top-level entries inside the dependency folder
+    // Inspect immediate top-level entries inside the dependency folder
     let (Ok(b_rd), Ok(c_rd)) = (fs::read_dir(base_dep), fs::read_dir(curr_dep)) else {
         return true;
     };
     let mut b_entries = HashMap::new();
     for entry in b_rd.flatten() {
         if let Ok(m) = entry.path().symlink_metadata() {
-            b_entries.insert(entry.file_name(), (m.mtime(), m.mtime_nsec()));
+            let is_dir = m.file_type().is_dir();
+            b_entries.insert(
+                entry.file_name(),
+                (is_dir, m.len(), m.mtime(), m.mtime_nsec()),
+            );
         }
     }
 
@@ -222,9 +226,20 @@ fn heavy_dir_changed(base_dep: &Path, curr_dep: &Path) -> bool {
         let Ok(m) = entry.path().symlink_metadata() else {
             return true;
         };
+        let is_dir = m.file_type().is_dir();
         match b_entries.get(&entry.file_name()) {
-            Some(&(mt, nsec)) if mt == m.mtime() && nsec == m.mtime_nsec() => {}
-            _ => return true,
+            Some(&(old_is_dir, old_len, mt, nsec)) => {
+                if old_is_dir != is_dir {
+                    return true;
+                }
+                // For regular files, check length and timestamp.
+                // For directories, APFS clonefile assigns new directory mtimes,
+                // so matching directory name and type is expected and stable.
+                if !is_dir && (old_len != m.len() || mt != m.mtime() || nsec != m.mtime_nsec()) {
+                    return true;
+                }
+            }
+            None => return true,
         }
     }
 

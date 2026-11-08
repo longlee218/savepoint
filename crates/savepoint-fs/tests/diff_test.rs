@@ -161,3 +161,52 @@ fn test_heavy_dirs_collapsed_and_build_caches_ignored() {
             && d.kind == savepoint_core::ChangeKind::Created
     ));
 }
+
+#[test]
+fn test_node_modules_unchanged_produces_zero_deltas() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().join("base");
+    let curr = temp.path().join("curr");
+    std::fs::create_dir_all(base.join("node_modules/pkg_a")).unwrap();
+    std::fs::write(base.join("node_modules/pkg_a/index.js"), "module.exports = 1;").unwrap();
+    std::fs::write(base.join("package.json"), "{}").unwrap();
+
+    savepoint_fs::clone_workspace(&base, &curr).unwrap();
+
+    let deltas = savepoint_fs::compute_deltas(&base, &curr).unwrap();
+    assert_eq!(
+        deltas.len(),
+        0,
+        "Untouched node_modules must not produce any diff: {:?}",
+        deltas
+    );
+}
+
+#[test]
+fn test_gitignore_respected_by_clone_and_diff() {
+    let temp = tempfile::tempdir().unwrap();
+    let ws = temp.path().join("ws");
+    let snap = temp.path().join("snap");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::create_dir_all(ws.join(".claude/worktrees")).unwrap();
+    std::fs::create_dir_all(ws.join("node_modules/dep")).unwrap();
+    std::fs::create_dir_all(ws.join("dist")).unwrap();
+
+    std::fs::write(ws.join(".gitignore"), "node_modules\n.claude/\ndist/\n").unwrap();
+    std::fs::write(ws.join("src/main.rs"), "fn main() {}").unwrap();
+    std::fs::write(ws.join("node_modules/dep/index.js"), "1").unwrap();
+    std::fs::write(ws.join(".claude/worktrees/config.json"), "{}").unwrap();
+    std::fs::write(ws.join("dist/bundle.js"), "1").unwrap();
+
+    savepoint_fs::clone_workspace(&ws, &snap).unwrap();
+
+    // Verify snapshot skipped gitignored entries and .claude
+    assert!(snap.join("src/main.rs").exists());
+    assert!(!snap.join("node_modules").exists());
+    assert!(!snap.join(".claude").exists());
+    assert!(!snap.join("dist").exists());
+
+    // Verify compute_deltas also ignores them
+    let deltas = savepoint_fs::compute_deltas(&snap, &ws).unwrap();
+    assert_eq!(deltas.len(), 0, "No changes detected on ignored paths");
+}

@@ -3,6 +3,7 @@ members = [
     "crates/savepoint-core",
     "crates/savepoint-fs",
     "crates/savepoint-state",
+    "crates/savepoint-egress",
     "crates/savepoint-sandbox",
     "crates/savepoint-speculate",
     "crates/savepoint-mcp",

@@ -1,0 +1,23 @@
+[package]
+name = "savepoint-egress"
+description = "Egress hypervisor, mutation guard, VCR cassette record/replay, and Saga compensation engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+savepoint-core = { path = "../savepoint-core" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+httparse = "1.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -7,7 +7,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use savepoint_core::{FileDelta, Transaction};
-use std::io::stdout;
+use std::io::{stdout, Write};
 use std::time::Duration;
 
 /// Runs the interactive TUI timeline for the provided transaction and live deltas.
@@ -16,6 +16,19 @@ pub fn run_timeline(
     tx: Transaction,
     live_deltas: Vec<FileDelta>,
 ) -> anyhow::Result<TimelineAction> {
+    // Set panic hook to ensure terminal is always restored even on unhandled panic
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+        let _ = disable_raw_mode();
+        let _ = std::io::stdout().flush();
+        default_panic_hook(panic_info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -26,10 +39,18 @@ pub fn run_timeline(
 
     let res = run_loop(&mut terminal, &mut app);
 
-    // Guarantee cleanup
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    // Guarantee clean terminal restoration in correct order:
+    // 1. Leave alternate screen and show cursor while still in terminal context
+    let _ = execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    );
+    let _ = terminal.backend_mut().flush();
+
+    // 2. Disable raw mode AFTER exiting alternate screen
+    let _ = disable_raw_mode();
+    let _ = std::io::stdout().flush();
 
     res?;
     Ok(app.action.unwrap_or(TimelineAction::Cancel))
@@ -47,6 +68,11 @@ fn run_loop<B: ratatui::backend::Backend>(
                 if key.kind == KeyEventKind::Press {
                     match app.mode {
                         ViewMode::ConfirmingRewind(_) => match key.code {
+                            KeyCode::Char('c')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                app.cancel_confirmation();
+                            }
                             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                                 app.confirm_rewind();
                             }
@@ -59,6 +85,11 @@ fn run_loop<B: ratatui::backend::Backend>(
                             _ => {}
                         },
                         ViewMode::Normal => match key.code {
+                            KeyCode::Char('c')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                app.cancel();
+                            }
                             KeyCode::Up | KeyCode::Char('k') => app.previous(),
                             KeyCode::Down | KeyCode::Char('j') => app.next(),
                             KeyCode::Home | KeyCode::Char('g') => app.first(),
