@@ -11,6 +11,8 @@ use std::io::{stdout, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+pub mod bench;
+
 #[derive(Parser)]
 #[command(
     name = "savepoint",
@@ -194,6 +196,8 @@ pub enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Run extreme performance benchmarks across CoW, CAS, Diff, and Egress engines
+    Bench,
 }
 
 #[derive(Subcommand, Debug)]
@@ -985,6 +989,9 @@ pub fn run_cli() -> anyhow::Result<()> {
                     );
                 }
             }
+        }
+        Commands::Bench => {
+            bench::run_all_benchmarks();
         }
     }
 

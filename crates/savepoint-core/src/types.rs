@@ -94,8 +94,18 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn new(id: TransactionId, workspace_root: PathBuf, shadow_root: PathBuf) -> Self {
+        Self::with_branch(id, workspace_root, shadow_root, "main")
+    }
+
+    pub fn with_branch(
+        id: TransactionId,
+        workspace_root: PathBuf,
+        shadow_root: PathBuf,
+        branch: impl Into<String>,
+    ) -> Self {
+        let b = branch.into();
         let mut branches = std::collections::HashMap::new();
-        branches.insert("main".to_string(), 0);
+        branches.insert(b.clone(), 0);
         Self {
             id,
             workspace_root,
@@ -104,7 +114,7 @@ impl Transaction {
             status: TransactionStatus::Active,
             checkpoints: Vec::new(),
             current_step_index: None,
-            active_branch: "main".to_string(),
+            active_branch: b,
             branches,
         }
     }

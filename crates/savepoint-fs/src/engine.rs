@@ -108,7 +108,8 @@ impl ShadowEngine {
             );
         }
 
-        let content_hash = compute_checkpoint_hash(None, "main", &[]);
+        let branch = Self::detect_git_branch(&ws).unwrap_or_else(|| "main".to_string());
+        let content_hash = compute_checkpoint_hash(None, &branch, &[]);
         let initial_cp = Checkpoint {
             step_index: 0,
             timestamp: Utc::now(),
@@ -116,12 +117,12 @@ impl ShadowEngine {
             prompt: Some("Baseline pristine workspace".to_string()),
             summary: None,
             deltas: Vec::new(),
-            branch: "main".to_string(),
+            branch: branch.clone(),
             parent_step: None,
             content_hash: Some(content_hash),
         };
 
-        let mut tx = Transaction::new(tx_id, ws, tx_dir);
+        let mut tx = Transaction::with_branch(tx_id, ws, tx_dir, branch);
         tx.record_checkpoint_in_branch(initial_cp);
         Self::save_metadata(&tx)?;
 
@@ -459,7 +460,7 @@ impl ShadowEngine {
                     if let Ok(content) = fs::read_to_string(&meta_file) {
                         if let Ok(tx) = serde_json::from_str::<Transaction>(&content) {
                             if tx.status == TransactionStatus::Active {
-                                return Ok(Some(tx));
+                                return Ok(Some(Self::sync_tx_branch_with_git(tx)));
                             }
                         }
                     }
@@ -499,7 +500,7 @@ impl ShadowEngine {
             }
         }
 
-        Ok(active_tx)
+        Ok(active_tx.map(Self::sync_tx_branch_with_git))
     }
 
     /// Loads the active transaction if present, or falls back to the most recently created transaction
@@ -614,6 +615,82 @@ impl ShadowEngine {
                 }
             }
         }
+    }
+
+    /// Detects the active git branch for a workspace root.
+    /// Reads `.git/HEAD` directly (fast path, works with standard repos and worktrees)
+    /// and falls back to `git branch --show-current`.
+    pub fn detect_git_branch(workspace_root: &Path) -> Option<String> {
+        let dot_git = workspace_root.join(".git");
+        let head_content = if dot_git.is_file() {
+            fs::read_to_string(&dot_git).ok().and_then(|content| {
+                content
+                    .lines()
+                    .find_map(|line| line.strip_prefix("gitdir:"))
+                    .and_then(|p| {
+                        let raw = PathBuf::from(p.trim());
+                        let git_dir = if raw.is_absolute() {
+                            raw
+                        } else {
+                            workspace_root.join(raw)
+                        };
+                        fs::read_to_string(git_dir.join("HEAD")).ok()
+                    })
+            })
+        } else if dot_git.is_dir() {
+            fs::read_to_string(dot_git.join("HEAD")).ok()
+        } else {
+            None
+        };
+
+        if let Some(head) = head_content {
+            let trimmed = head.trim();
+            if let Some(branch) = trimmed.strip_prefix("ref: refs/heads/") {
+                let b = branch.trim().to_string();
+                if !b.is_empty() {
+                    return Some(b);
+                }
+            }
+        }
+
+        // Fallback to git CLI if .git format is non-standard or detached
+        std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(workspace_root)
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if !s.is_empty() {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn sync_tx_branch_with_git(mut tx: Transaction) -> Transaction {
+        if tx.active_branch == "main" && tx.branches.len() == 1 && tx.branches.contains_key("main")
+        {
+            if let Some(git_branch) = Self::detect_git_branch(&tx.workspace_root) {
+                if git_branch != "main" {
+                    let step = tx.branches.remove("main").unwrap_or(0);
+                    tx.branches.insert(git_branch.clone(), step);
+                    tx.active_branch = git_branch.clone();
+                    for cp in &mut tx.checkpoints {
+                        if cp.branch == "main" {
+                            cp.branch = git_branch.clone();
+                        }
+                    }
+                    let _ = Self::save_metadata(&tx);
+                }
+            }
+        }
+        tx
     }
 }
 

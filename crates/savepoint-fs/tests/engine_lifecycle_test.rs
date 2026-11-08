@@ -183,3 +183,21 @@ fn test_storage_routing_git_worktree_exclude_and_commit_cleans_active_tx_pointer
         "active_tx_id.txt should be cleaned up on commit"
     );
 }
+
+#[test]
+fn test_detect_git_branch_sets_active_branch() {
+    let temp = tempfile::tempdir().unwrap();
+    let ws = temp.path().join("git_ws");
+    fs::create_dir_all(ws.join(".git")).unwrap();
+    fs::write(ws.join(".git/HEAD"), "ref: refs/heads/fix/send-to-bot\n").unwrap();
+    fs::create_dir_all(ws.join("src")).unwrap();
+    fs::write(ws.join("src/lib.rs"), "pub fn ok() {}").unwrap();
+
+    let tx = ShadowEngine::begin_transaction(&ws).unwrap();
+    assert_eq!(tx.active_branch, "fix/send-to-bot");
+    assert_eq!(tx.checkpoints[0].branch, "fix/send-to-bot");
+
+    // Also verify load_active_transaction returns the correct branch
+    let loaded = ShadowEngine::load_active_transaction(&ws).unwrap().unwrap();
+    assert_eq!(loaded.active_branch, "fix/send-to-bot");
+}
