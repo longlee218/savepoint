@@ -1,0 +1,21 @@
+[package]
+name = "savepoint-cas"
+description = "Content-Defined Chunking (FastCDC), BLAKE3 content-addressable storage, and tiered lifecycle engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+savepoint-core = { path = "../savepoint-core" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+fastcdc = "5.0"
+blake3 = "1.8"
+zstd = "0.14"
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
