@@ -96,4 +96,21 @@ fn test_cli_parse_branch_and_diff_commands() {
         }
         _ => panic!("Expected Commands::Diff"),
     }
+
+    // 4. sp gc --all
+    let cli = Cli::try_parse_from(["sp", "gc", "--all"]).unwrap();
+    match cli.command {
+        Commands::Gc { all, path } => {
+            assert!(all);
+            assert_eq!(path, PathBuf::from("."));
+        }
+        _ => panic!("Expected Commands::Gc"),
+    }
+
+    // 5. sp clean alias
+    let cli = Cli::try_parse_from(["sp", "clean"]).unwrap();
+    match cli.command {
+        Commands::Gc { all, .. } => assert!(!all),
+        _ => panic!("Expected Commands::Gc via clean alias"),
+    }
 }

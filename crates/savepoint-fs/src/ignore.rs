@@ -20,6 +20,9 @@ pub const HEAVY_CACHE_DIRS: &[&str] = &[
     ".gradle",
     ".turbo",
     ".cache",
+    ".output",
+    "dist",
+    "build",
 ];
 
 pub const HEAVY_DEP_DIRS: &[&str] = &["node_modules", ".venv", "venv"];

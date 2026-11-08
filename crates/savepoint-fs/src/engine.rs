@@ -27,6 +27,22 @@ impl ShadowEngine {
             return PathBuf::from(custom_dir).join("workspaces").join(hash);
         }
 
+        // If workspace is inside OS temp directory (e.g. unit tests or ephemeral runs),
+        // isolate storage inside a dedicated temp store so ~/.savepoint is never polluted!
+        let temp_base = std::env::temp_dir();
+        if canonical.starts_with(&temp_base)
+            || canonical.starts_with("/private/var/folders")
+            || canonical.starts_with("/var/folders")
+            || canonical.starts_with("/tmp")
+            || canonical
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().starts_with(".tmp"))
+        {
+            let test_savepoint = temp_base.join("savepoint-temp-spool").join("workspaces").join(&hash);
+            let _ = fs::create_dir_all(&test_savepoint);
+            return test_savepoint;
+        }
+
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         let home_savepoint = PathBuf::from(home).join(".savepoint");
         let _ = fs::create_dir_all(&home_savepoint);
@@ -67,6 +83,10 @@ impl ShadowEngine {
 
         let tx_id = TransactionId::new();
         let ws_storage = Self::resolve_storage_dir(&ws);
+
+        // Automatically prune old finished transactions in this workspace (retention: 2)
+        let _ = Self::prune_old_transactions(&ws, 2);
+
         let tx_dir = ws_storage.join("transactions").join(tx_id.as_str());
         let snapshots_dir = tx_dir.join("snapshots");
 
@@ -436,7 +456,131 @@ impl ShadowEngine {
         tx.status = TransactionStatus::Committed;
         Self::save_metadata(tx)?;
 
+        // Automatically prune historical finished transactions in this workspace (retention: 2)
+        let _ = Self::prune_old_transactions(&tx.workspace_root, 2);
+
         Ok(())
+    }
+
+    /// Prunes old completed/committed transactions in the workspace storage,
+    /// keeping the currently active transaction plus at most `keep_last` recent transactions.
+    pub fn prune_old_transactions(workspace_root: &Path, keep_last: usize) -> Result<usize> {
+        let ws = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.to_path_buf());
+        let ws_storage = Self::resolve_storage_dir(&ws);
+        let tx_root = ws_storage.join("transactions");
+        if !tx_root.is_dir() {
+            return Ok(0);
+        }
+
+        let active_id = fs::read_to_string(ws_storage.join("active_tx_id.txt"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        let mut entries = Vec::new();
+        if let Ok(rd) = fs::read_dir(&tx_root) {
+            for entry in rd.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let id = entry.file_name().to_string_lossy().to_string();
+                if id == active_id {
+                    continue; // Never prune currently active transaction
+                }
+
+                let meta_path = path.join("meta.json");
+                let mtime = fs::metadata(&meta_path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                entries.push((path, mtime));
+            }
+        }
+
+        // Sort descending by modified time (newest first)
+        entries.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut pruned = 0;
+        // Keep the newest `keep_last`, remove the rest
+        for (path, _) in entries.into_iter().skip(keep_last) {
+            if fs::remove_dir_all(&path).is_ok() {
+                pruned += 1;
+            }
+        }
+
+        Ok(pruned)
+    }
+
+    /// Global Garbage Collector: scans ~/.savepoint/workspaces/ and removes:
+    /// 1. Orphaned workspaces whose `workspace_root` no longer exists on disk (e.g. deleted tempdirs).
+    /// 2. Inactive/committed transactions beyond `keep_last` in remaining workspaces.
+    pub fn gc_orphaned_workspaces() -> Result<(usize, usize)> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let base_savepoint = if let Ok(custom) = std::env::var("SAVEPOINT_DIR") {
+            PathBuf::from(custom).join("workspaces")
+        } else {
+            PathBuf::from(home).join(".savepoint").join("workspaces")
+        };
+
+        Self::gc_orphaned_workspaces_in_dir(&base_savepoint)
+    }
+
+    /// Garbage collects orphaned and obsolete workspaces in a specific root directory.
+    pub fn gc_orphaned_workspaces_in_dir(base_savepoint: &Path) -> Result<(usize, usize)> {
+        if !base_savepoint.is_dir() {
+            return Ok((0, 0));
+        }
+
+        let mut orphaned_workspaces = 0;
+        let mut pruned_transactions = 0;
+
+        if let Ok(rd) = fs::read_dir(base_savepoint) {
+            for entry in rd.flatten() {
+                let ws_dir = entry.path();
+                if !ws_dir.is_dir() {
+                    continue;
+                }
+
+                // Check transactions in this workspace
+                let tx_dir = ws_dir.join("transactions");
+                let mut ws_root: Option<PathBuf> = None;
+
+                if tx_dir.is_dir() {
+                    if let Ok(tx_rd) = fs::read_dir(&tx_dir) {
+                        for tx_entry in tx_rd.flatten() {
+                            let meta_file = tx_entry.path().join("meta.json");
+                            if let Ok(content) = fs::read_to_string(&meta_file) {
+                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                                    if let Some(r) = parsed.get("workspace_root").and_then(|v| v.as_str()) {
+                                        ws_root = Some(PathBuf::from(r));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let is_orphaned = match &ws_root {
+                    Some(root) => !root.exists(),
+                    None => true, // No transactions or meta.json found
+                };
+
+                if is_orphaned {
+                    if fs::remove_dir_all(&ws_dir).is_ok() {
+                        orphaned_workspaces += 1;
+                    }
+                } else if let Some(root) = ws_root {
+                    if let Ok(count) = Self::prune_old_transactions(&root, 2) {
+                        pruned_transactions += count;
+                    }
+                }
+            }
+        }
+
+        Ok((orphaned_workspaces, pruned_transactions))
     }
 
     /// Loads an existing active transaction from a workspace directory.

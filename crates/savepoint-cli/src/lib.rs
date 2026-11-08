@@ -198,6 +198,15 @@ pub enum Commands {
     },
     /// Run extreme performance benchmarks across CoW, CAS, Diff, and Egress engines
     Bench,
+    /// Clean up obsolete transactions and orphaned test workspaces [alias: clean]
+    #[command(alias = "clean")]
+    Gc {
+        /// Prune all completed transactions and orphaned workspaces globally
+        #[arg(short, long)]
+        all: bool,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -992,6 +1001,33 @@ pub fn run_cli() -> anyhow::Result<()> {
         }
         Commands::Bench => {
             bench::run_all_benchmarks();
+        }
+        Commands::Gc { all, path } => {
+            println!("\x1b[36m[savepoint gc]\x1b[0m Running storage garbage collection...");
+            let (orphaned, pruned) = ShadowEngine::gc_orphaned_workspaces()?;
+            let local_pruned = if all {
+                ShadowEngine::prune_old_transactions(&path, 0)?
+            } else {
+                ShadowEngine::prune_old_transactions(&path, 2)?
+            };
+
+            // Also run CAS mark-and-sweep if CAS repository exists
+            let cas_root = path.join(".sp_cas");
+            let mut cas_pruned = 0;
+            if cas_root.is_dir() {
+                if let Ok(cas) = savepoint_cas::CasEngine::open(&cas_root, savepoint_cas::CasConfig::default()) {
+                    if let Ok(stats) = cas.run_gc(&[]) {
+                        cas_pruned = stats.pruned_chunks;
+                    }
+                }
+            }
+
+            println!("\x1b[32m[savepoint gc]\x1b[0m Garbage collection completed successfully:");
+            println!("  • Orphaned workspace directories pruned : \x1b[1m{}\x1b[0m", orphaned);
+            println!("  • Obsolete transaction sessions pruned  : \x1b[1m{}\x1b[0m", pruned + local_pruned);
+            if cas_pruned > 0 {
+                println!("  • Orphaned CAS chunks pruned            : \x1b[1m{}\x1b[0m", cas_pruned);
+            }
         }
     }
 
