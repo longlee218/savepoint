@@ -207,7 +207,7 @@ impl ShadowEngine {
         if !live_deltas.is_empty() {
             Self::checkpoint(
                 tx,
-                Some(&format!("Tự động lưu: Trước khi chuyển sang Bước #{}", target_step)),
+                Some(&format!("Auto-save before switching to Step #{}", target_step)),
                 None,
             )?;
         }

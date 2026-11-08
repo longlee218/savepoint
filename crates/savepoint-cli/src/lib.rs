@@ -164,7 +164,7 @@ pub fn run_cli() -> anyhow::Result<()> {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found in {:?}. Run `sp begin` or `sp run` first.\x1b[0m", path);
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found in {:?}. Run `sp begin` or `sp run` first.\x1b[0m", path);
                     return Ok(());
                 }
             };
@@ -173,13 +173,13 @@ pub fn run_cli() -> anyhow::Result<()> {
             match ShadowEngine::rewind_previous(&mut tx)? {
                 Some(target_step) => {
                     println!(
-                        "\x1b[32m✔ [Savepoint]\x1b[0m ⏪ Rewound to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m",
+                        "\x1b[32m[savepoint]\x1b[0m Rewound to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m",
                         target_step,
                         start.elapsed()
                     );
                 }
                 None => {
-                    println!("\x1b[33m[Savepoint] Already at baseline step #0. Nothing to rewind.\x1b[0m");
+                    println!("\x1b[33m[savepoint] Already at baseline step #0. Nothing to rewind.\x1b[0m");
                 }
             }
         }
@@ -187,7 +187,7 @@ pub fn run_cli() -> anyhow::Result<()> {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found in {:?}. Run `sp begin` first.\x1b[0m", path);
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found in {:?}. Run `sp begin` first.\x1b[0m", path);
                     return Ok(());
                 }
             };
@@ -196,16 +196,16 @@ pub fn run_cli() -> anyhow::Result<()> {
             let cp = ShadowEngine::checkpoint(&mut tx, message.as_deref(), None)?;
             let elapsed = start.elapsed();
 
-            println!("\x1b[32m✔ [Savepoint]\x1b[0m Checkpoint \x1b[1m#{}\x1b[0m saved in \x1b[36m{:?}\x1b[0m", cp.step_index, elapsed);
+            println!("\x1b[32m[savepoint]\x1b[0m Checkpoint \x1b[1m#{}\x1b[0m saved in \x1b[36m{:?}\x1b[0m", cp.step_index, elapsed);
             if let Some(msg) = cp.prompt {
-                println!("  Prompt    : {}", msg);
+                println!("  Message : {}", msg);
             }
-            println!("  Changes   : {} files affected", cp.deltas.len());
+            println!("  Changes : {} file(s)", cp.deltas.len());
             for delta in &cp.deltas {
                 match delta.kind {
-                    ChangeKind::Created => println!("    \x1b[32m+ {}\x1b[0m", delta.relative_path.display()),
-                    ChangeKind::Modified => println!("    \x1b[33m~ {}\x1b[0m", delta.relative_path.display()),
-                    ChangeKind::Deleted => println!("    \x1b[31m- {}\x1b[0m", delta.relative_path.display()),
+                    ChangeKind::Created => println!("    \x1b[32mA  {}\x1b[0m", delta.relative_path.display()),
+                    ChangeKind::Modified => println!("    \x1b[33mM  {}\x1b[0m", delta.relative_path.display()),
+                    ChangeKind::Deleted => println!("    \x1b[31mD  {}\x1b[0m", delta.relative_path.display()),
                 }
             }
         }
@@ -224,39 +224,39 @@ pub fn run_cli() -> anyhow::Result<()> {
                 let commands = vec![
                     (
                         "save",
-                        "---\ndescription: [Savepoint] Lưu lại điểm mốc code an toàn (Checkpoint)\n---\n!sp save -m \"$ARGUMENTS\"\n",
+                        "---\ndescription: [Savepoint] Save an atomic CoW workspace checkpoint\n---\n!sp save -m \"$ARGUMENTS\"\n",
                     ),
                     (
                         "undo",
-                        "---\ndescription: [Savepoint] Hoàn tác nhanh về điểm mốc an toàn gần nhất\n---\n!sp undo\n",
+                        "---\ndescription: [Savepoint] Rewind workspace to the previous checkpoint\n---\n!sp undo\n",
                     ),
                     (
                         "timeline",
-                        "---\ndescription: [Savepoint] Mở giao diện Time Machine trực quan để xem lịch sử và tua lại\n---\n!sp ui\n",
+                        "---\ndescription: [Savepoint] Open interactive TUI timeline inspector\n---\n!sp ui\n",
                     ),
                     (
                         "diff",
-                        "---\ndescription: [Savepoint] Xem các thay đổi trực tiếp (blast radius) chưa lưu mốc\n---\n!sp diff\n",
+                        "---\ndescription: [Savepoint] Show uncommitted workspace file changes since HEAD\n---\n!sp diff\n",
                     ),
                     (
                         "status",
-                        "---\ndescription: [Savepoint] Xem trạng thái phiên giao dịch đang hoạt động\n---\n!sp status\n",
+                        "---\ndescription: [Savepoint] Show active transaction status and checkpoint list\n---\n!sp status\n",
                     ),
                     (
                         "fork",
-                        "---\ndescription: [Savepoint] Phân nhánh thử nghiệm mới từ mốc hiện tại\n---\n!sp fork $ARGUMENTS\n",
+                        "---\ndescription: [Savepoint] Fork a new speculative branch from the current checkpoint\n---\n!sp fork $ARGUMENTS\n",
                     ),
                     (
                         "branches",
-                        "---\ndescription: [Savepoint] Liệt kê các nhánh trong phiên giao dịch\n---\n!sp branches\n",
+                        "---\ndescription: [Savepoint] List all branches in the active transaction\n---\n!sp branches\n",
                     ),
                     (
                         "share",
-                        "---\ndescription: [Savepoint] Xuất gói tin Flight Recorder (.spbundle) đã lọc sạch secret để chia sẻ/tái hiện lỗi\n---\n!sp share $ARGUMENTS\n",
+                        "---\ndescription: [Savepoint] Export a secret-scrubbed .spbundle Flight Recorder file\n---\n!sp share $ARGUMENTS\n",
                     ),
                     (
                         "replay",
-                        "---\ndescription: [Savepoint] Tái hiện lại chính xác trạng thái workspace từ file .spbundle hoặc URI sp://replay/...\n---\n!sp replay $ARGUMENTS\n",
+                        "---\ndescription: [Savepoint] Replay a .spbundle file or sp://replay/<id> URI into the workspace\n---\n!sp replay $ARGUMENTS\n",
                     ),
                 ];
 
@@ -267,24 +267,24 @@ pub fn run_cli() -> anyhow::Result<()> {
                     fs::write(cmd_dir.join(format!("sp:{}.md", name)), content)?;
                 }
 
-                println!("\x1b[32m✔ [Savepoint]\x1b[0m Successfully installed Claude Code namespaced slash commands!");
-                println!("  Location : {:?}", cmd_dir);
-                println!("  Prefix   : \x1b[33msp:*\x1b[0m (isolated namespace, không đè command khác)");
-                println!("  Commands installed:");
-                println!("    \x1b[36m/sp:save [ghi chú]\x1b[0m -> Lưu điểm mốc an toàn (Checkpoint)");
-                println!("    \x1b[36m/sp:undo\x1b[0m           -> Hoàn tác nhanh về mốc trước đó");
-                println!("    \x1b[36m/sp:timeline\x1b[0m       -> Mở Time Machine TUI trực quan");
-                println!("    \x1b[36m/sp:diff\x1b[0m           -> Xem các thay đổi trực tiếp chưa lưu");
-                println!("    \x1b[36m/sp:status\x1b[0m         -> Xem trạng thái phiên hiện tại");
+                println!("\x1b[32m[savepoint]\x1b[0m Installed Claude Code namespaced slash commands:");
+                println!("  Directory : {:?}", cmd_dir);
+                println!("  Namespace : \x1b[33msp:*\x1b[0m");
+                println!("  Commands  :");
+                println!("    \x1b[36m/sp:save [msg]\x1b[0m  Save a workspace checkpoint");
+                println!("    \x1b[36m/sp:undo\x1b[0m        Rewind to previous checkpoint");
+                println!("    \x1b[36m/sp:timeline\x1b[0m    Open interactive TUI timeline");
+                println!("    \x1b[36m/sp:diff\x1b[0m        Show uncommitted workspace changes");
+                println!("    \x1b[36m/sp:status\x1b[0m      Show active transaction status");
             }
         },
         Commands::Run { command } => {
             let cwd = std::env::current_dir()?;
-            println!("\x1b[36m⚡ [Savepoint]\x1b[0m Starting transactional session for \x1b[1m{:?}\x1b[0m", command);
+            println!("\x1b[36m[savepoint]\x1b[0m Starting supervised session for \x1b[1m{:?}\x1b[0m", command);
             let mut tx = ShadowEngine::begin_transaction(&cwd)?;
-            println!("\x1b[32m✔ [Savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m active.", tx.id);
-            println!("\x1b[90m  Hotkeys: [Ctrl+S] Quick Save | [Ctrl+R] Open TUI Timeline\x1b[0m");
-            println!("\x1b[90m  Claude Slash Commands: /sp:save | /sp:undo | /sp:timeline | /sp:diff\x1b[0m\r\n");
+            println!("\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m active.", tx.id);
+            println!("\x1b[90m  Hotkeys: [Ctrl+S] Save checkpoint | [Ctrl+R] Open TUI timeline\x1b[0m");
+            println!("\x1b[90m  Slash  : /sp:save | /sp:undo | /sp:timeline | /sp:diff\x1b[0m\r\n");
 
             let program = &command[0];
             let args: Vec<&str> = command.iter().skip(1).map(|s| s.as_str()).collect();
@@ -301,7 +301,7 @@ pub fn run_cli() -> anyhow::Result<()> {
                             let start = Instant::now();
                             if let Ok(cp) = ShadowEngine::checkpoint(&mut tx, Some("Manual (Ctrl+S)"), None) {
                                 print!(
-                                    "\r\n\x1b[32m[Savepoint] Checkpoint #{} saved in {:?} ({} deltas)\x1b[0m\r\n",
+                                    "\r\n\x1b[32m[savepoint] Checkpoint #{} saved in {:?} ({} files)\x1b[0m\r\n",
                                     cp.step_index,
                                     start.elapsed(),
                                     cp.deltas.len()
@@ -315,14 +315,14 @@ pub fn run_cli() -> anyhow::Result<()> {
 
                             let live_deltas = ShadowEngine::compute_live_deltas(&tx).unwrap_or_default();
 
-                            // Launch the interactive TUI timeline!
+                            // Launch the interactive TUI timeline
                             if let Ok(action) = run_timeline(tx.clone(), live_deltas) {
                                 match action {
                                     TimelineAction::Rewind(target_step) => {
                                         let start = Instant::now();
                                         if ShadowEngine::rewind(&mut tx, target_step).is_ok() {
                                             println!(
-                                                "\r\n\x1b[33m[Savepoint] ⏪ Rewound workspace to Step #{} in {:?}!\x1b[0m\r\n",
+                                                "\r\n\x1b[33m[savepoint] Restored workspace to Step #{} in {:?}.\x1b[0m\r\n",
                                                 target_step,
                                                 start.elapsed()
                                             );
@@ -330,7 +330,7 @@ pub fn run_cli() -> anyhow::Result<()> {
                                     }
                                     TimelineAction::Commit => {
                                         let _ = ShadowEngine::commit(&mut tx);
-                                        println!("\r\n\x1b[32m[Savepoint] ✅ Transaction committed via TUI.\x1b[0m\r\n");
+                                        println!("\r\n\x1b[32m[savepoint] Transaction committed via TUI.\x1b[0m\r\n");
                                     }
                                     TimelineAction::Cancel => {}
                                 }
@@ -341,9 +341,9 @@ pub fn run_cli() -> anyhow::Result<()> {
                         }
                         SupervisorEvent::ChildExited(code) => {
                             drop(guard.take());
-                            println!("\r\n\x1b[36m⚡ [Savepoint]\x1b[0m Child process exited with status {}.", code);
+                            println!("\r\n\x1b[36m[savepoint]\x1b[0m Child process exited with status {}.", code);
                             let _ = ShadowEngine::commit(&mut tx);
-                            println!("\x1b[32m✔ [Savepoint]\x1b[0m Transaction {} committed.\x1b[0m", tx.id);
+                            println!("\x1b[32m[savepoint]\x1b[0m Transaction {} committed.\x1b[0m", tx.id);
                             break;
                         }
                     },
@@ -353,7 +353,7 @@ pub fn run_cli() -> anyhow::Result<()> {
                             if !deltas.is_empty() {
                                 let _ = ShadowEngine::checkpoint(
                                     &mut tx,
-                                    Some("Tự động lưu: Phát hiện thay đổi trong thư mục"),
+                                    Some("Auto-save: workspace changes detected"),
                                     None,
                                 );
                             }
@@ -369,7 +369,7 @@ pub fn run_cli() -> anyhow::Result<()> {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found in {:?}. Run `sp begin` or `sp run` first.\x1b[0m", path);
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found in {:?}. Run `sp begin` or `sp run` first.\x1b[0m", path);
                     return Ok(());
                 }
             };
@@ -380,25 +380,23 @@ pub fn run_cli() -> anyhow::Result<()> {
                 TimelineAction::Rewind(step) => {
                     let start = Instant::now();
                     ShadowEngine::rewind(&mut tx, step)?;
-                    println!("\x1b[32m✔ [Savepoint]\x1b[0m ⏪ Rewound to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", step, start.elapsed());
+                    println!("\x1b[32m[savepoint]\x1b[0m Restored to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", step, start.elapsed());
                 }
                 TimelineAction::Commit => {
                     ShadowEngine::commit(&mut tx)?;
-                    println!("\x1b[32m✔ [Savepoint]\x1b[0m ✅ Transaction \x1b[1m{}\x1b[0m committed.\x1b[0m", tx.id);
+                    println!("\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m committed.\x1b[0m", tx.id);
                 }
-                TimelineAction::Cancel => {
-                    println!("TUI dismissed.");
-                }
+                TimelineAction::Cancel => {}
             }
         }
         Commands::Begin { path } => {
             let start = Instant::now();
             let tx = ShadowEngine::begin_transaction(&path)?;
             let elapsed = start.elapsed();
-            println!("\x1b[32m✔ [Savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m started in \x1b[36m{:?}\x1b[0m", tx.id, elapsed);
+            println!("\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m started in \x1b[36m{:?}\x1b[0m", tx.id, elapsed);
             println!("  Workspace : {:?}", tx.workspace_root);
             println!("  Storage   : {:?}", tx.shadow_root);
-            println!("  Baseline  : Step #0 captured via APFS Copy-on-Write.");
+            println!("  Baseline  : Step #0 captured via CoW.");
         }
         Commands::Status { path } => {
             let tx = match ShadowEngine::load_active_transaction(&path)? {
@@ -409,19 +407,22 @@ pub fn run_cli() -> anyhow::Result<()> {
                 }
             };
 
-            println!("\x1b[1m=== Savepoint Transaction: {} ===\x1b[0m", tx.id);
-            println!("Status    : {:?}", tx.status);
-            println!("Branch    : \x1b[32m* {}\x1b[0m (All: {})", tx.active_branch, tx.branch_names().join(", "));
-            println!("Workspace : {:?}", tx.workspace_root);
-            println!("Timeline  : {} checkpoints", tx.checkpoints.len());
+            println!("\x1b[1mSavepoint Transaction: {}\x1b[0m", tx.id);
+            println!("  Status    : {:?}", tx.status);
+            println!("  Branch    : \x1b[32m* {}\x1b[0m (all: {})", tx.active_branch, tx.branch_names().join(", "));
+            println!("  HEAD      : #{:02}", tx.active_step());
+            println!("  Workspace : {:?}", tx.workspace_root);
+            println!("  Timeline  : {} checkpoint(s)", tx.checkpoints.len());
 
             for cp in &tx.checkpoints {
+                let marker = if cp.step_index == tx.active_step() { "*" } else { " " };
                 println!(
-                    "  \x1b[36m[Step #{}]\x1b[0m [{}] {} | {} deltas",
+                    "  {} \x1b[36m#{:02}\x1b[0m [{}] {:>2}f  {}",
+                    marker,
                     cp.step_index,
                     cp.branch,
-                    cp.prompt.as_deref().unwrap_or("No description"),
-                    cp.deltas.len()
+                    cp.deltas.len(),
+                    cp.prompt.as_deref().unwrap_or("Baseline snapshot")
                 );
             }
         }
@@ -429,7 +430,7 @@ pub fn run_cli() -> anyhow::Result<()> {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found.\x1b[0m");
                     return Ok(());
                 }
             };
@@ -440,17 +441,16 @@ pub fn run_cli() -> anyhow::Result<()> {
             let elapsed = start.elapsed();
 
             if to >= prev_step {
-                println!("\x1b[32m✔ [Savepoint]\x1b[0m ⏩ Fast-forwarded (Redo) to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", to, elapsed);
+                println!("\x1b[32m[savepoint]\x1b[0m Fast-forwarded to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", to, elapsed);
             } else {
-                println!("\x1b[32m✔ [Savepoint]\x1b[0m ⏪ Rewound (Undo) to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", to, elapsed);
+                println!("\x1b[32m[savepoint]\x1b[0m Rewound to Step \x1b[1m#{}\x1b[0m in \x1b[36m{:?}\x1b[0m", to, elapsed);
             }
-            println!("  Current step is now #{}.", tx.active_step());
         }
         Commands::Commit { path } => {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found.\x1b[0m");
                     return Ok(());
                 }
             };
@@ -459,27 +459,27 @@ pub fn run_cli() -> anyhow::Result<()> {
             ShadowEngine::commit(&mut tx)?;
             let elapsed = start.elapsed();
 
-            println!("\x1b[32m✔ [Savepoint]\x1b[0m ✅ Transaction \x1b[1m{}\x1b[0m committed in \x1b[36m{:?}\x1b[0m", tx.id, elapsed);
+            println!("\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m committed in \x1b[36m{:?}\x1b[0m", tx.id, elapsed);
         }
         Commands::Diff { path } => {
             let tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found.\x1b[0m");
                     return Ok(());
                 }
             };
 
             let live_deltas = ShadowEngine::compute_live_deltas(&tx)?;
             if live_deltas.is_empty() {
-                println!("\x1b[32m✔ Thư mục làm việc sạch sẽ (không có thay đổi so với mốc gần nhất).\x1b[0m");
+                println!("\x1b[32mWorking tree clean (no changes since Step #{:02}).\x1b[0m", tx.active_step());
             } else {
-                println!("\x1b[1m=== Thay Đổi Trực Tiếp Hiện Tại (Chưa lưu mốc) ===\x1b[0m");
+                println!("\x1b[1mUncommitted changes since Step #{:02} ({} files):\x1b[0m", tx.active_step(), live_deltas.len());
                 for delta in &live_deltas {
                     match delta.kind {
-                        ChangeKind::Created => println!("  \x1b[32m+ [Tạo mới]  {}\x1b[0m", delta.relative_path.display()),
-                        ChangeKind::Modified => println!("  \x1b[33m~ [Sửa đổi]  {}\x1b[0m", delta.relative_path.display()),
-                        ChangeKind::Deleted => println!("  \x1b[31m- [Đã xóa]   {}\x1b[0m", delta.relative_path.display()),
+                        ChangeKind::Created => println!("  \x1b[32mA  {}\x1b[0m", delta.relative_path.display()),
+                        ChangeKind::Modified => println!("  \x1b[33mM  {}\x1b[0m", delta.relative_path.display()),
+                        ChangeKind::Deleted => println!("  \x1b[31mD  {}\x1b[0m", delta.relative_path.display()),
                     }
                 }
             }
@@ -488,23 +488,23 @@ pub fn run_cli() -> anyhow::Result<()> {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found.\x1b[0m");
                     return Ok(());
                 }
             };
             let start = Instant::now();
             ShadowEngine::fork_branch(&mut tx, &branch)?;
-            println!("\x1b[32m✔ [Savepoint]\x1b[0m Forked new branch \x1b[1m'{}'\x1b[0m from Step #{} in \x1b[36m{:?}\x1b[0m", branch, tx.active_step(), start.elapsed());
+            println!("\x1b[32m[savepoint]\x1b[0m Forked new branch \x1b[1m'{}'\x1b[0m from Step #{} in \x1b[36m{:?}\x1b[0m", branch, tx.active_step(), start.elapsed());
         }
         Commands::Branches { path } => {
             let tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found.\x1b[0m");
                     return Ok(());
                 }
             };
-            println!("\x1b[1m=== Branches in Transaction {} ===\x1b[0m", tx.id);
+            println!("\x1b[1mBranches in Transaction {}\x1b[0m", tx.id);
             for b in tx.branch_names() {
                 if b == tx.active_branch {
                     println!("  \x1b[32m* {} (HEAD -> step #{})\x1b[0m", b, tx.branches.get(&b).unwrap_or(&0));
@@ -517,26 +517,26 @@ pub fn run_cli() -> anyhow::Result<()> {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found.\x1b[0m");
                     return Ok(());
                 }
             };
             let start = Instant::now();
             let step = ShadowEngine::switch_branch(&mut tx, &branch)?;
-            println!("\x1b[32m✔ [Savepoint]\x1b[0m Switched to branch \x1b[1m'{}'\x1b[0m (Step #{}) in \x1b[36m{:?}\x1b[0m", branch, step, start.elapsed());
+            println!("\x1b[32m[savepoint]\x1b[0m Switched to branch \x1b[1m'{}'\x1b[0m (Step #{}) in \x1b[36m{:?}\x1b[0m", branch, step, start.elapsed());
         }
         Commands::Merge { source, target, path } => {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31m✖ No active Savepoint transaction found.\x1b[0m");
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found.\x1b[0m");
                     return Ok(());
                 }
             };
             let target_branch = target.unwrap_or_else(|| tx.active_branch.clone());
             let start = Instant::now();
             let cp = ShadowEngine::merge_branch(&mut tx, &source, &target_branch)?;
-            println!("\x1b[32m✔ [Savepoint]\x1b[0m Merged branch \x1b[1m'{}'\x1b[0m into \x1b[1m'{}'\x1b[0m at Checkpoint #{} in \x1b[36m{:?}\x1b[0m", source, target_branch, cp.step_index, start.elapsed());
+            println!("\x1b[32m[savepoint]\x1b[0m Merged branch \x1b[1m'{}'\x1b[0m into \x1b[1m'{}'\x1b[0m at Checkpoint #{} in \x1b[36m{:?}\x1b[0m", source, target_branch, cp.step_index, start.elapsed());
         }
         Commands::Speculate { candidates, validation, path } => {
             let candidates_data = if candidates.trim().starts_with('[') {
@@ -547,20 +547,20 @@ pub fn run_cli() -> anyhow::Result<()> {
             let parsed_candidates: Vec<SpeculativeCandidate> = serde_json::from_str(&candidates_data)?;
             let start = Instant::now();
             let summary = SpeculativeEngine::evaluate_and_converge(&path, parsed_candidates, &validation)?;
-            println!("\x1b[1m=== Savepoint Speculative Execution Engine ===\x1b[0m");
-            println!("Candidates evaluated: {}", summary.total_candidates);
-            println!("Total time          : {:?}", start.elapsed());
+            println!("\x1b[1mSavepoint Speculative Execution\x1b[0m");
+            println!("  Candidates evaluated : {}", summary.total_candidates);
+            println!("  Elapsed time         : {:?}", start.elapsed());
             match summary.winner_branch {
                 Some(winner) => {
-                    println!("\x1b[32m✔ Winner Branch: '{}' passed validation and was atomically promoted to workspace!\x1b[0m", winner);
+                    println!("  Result               : \x1b[32mPASS (winner '{}' promoted to workspace)\x1b[0m", winner);
                 }
                 None => {
-                    println!("\x1b[31m✖ All speculative candidates failed validation. Workspace left 100% pristine.\x1b[0m");
+                    println!("  Result               : \x1b[31mFAIL (all candidates failed; workspace unchanged)\x1b[0m");
                 }
             }
             for rep in &summary.candidate_reports {
-                let status_icon = if rep.passed { "\x1b[32m✔ PASS\x1b[0m" } else { "\x1b[31m✖ FAIL\x1b[0m" };
-                println!("  {} [{}] in {:?} (modified {} files)", status_icon, rep.branch_name, Duration::from_millis(rep.duration_ms as u64), rep.modified_files_count);
+                let status_icon = if rep.passed { "\x1b[32mPASS\x1b[0m" } else { "\x1b[31mFAIL\x1b[0m" };
+                println!("    {} [{}] in {:?} ({} files modified)", status_icon, rep.branch_name, Duration::from_millis(rep.duration_ms as u64), rep.modified_files_count);
             }
         }
         Commands::Mcp => {
@@ -594,7 +594,7 @@ pub fn run_cli() -> anyhow::Result<()> {
             let start = Instant::now();
             let stats = FlightRecorder::export_bundle_with_step(&path, &output, step)?;
             println!(
-                "\x1b[32m✔ [Savepoint]\x1b[0m 📦 Exported Flight Recorder bundle to \x1b[1m{:?}\x1b[0m in \x1b[36m{:?}\x1b[0m",
+                "\x1b[32m[savepoint]\x1b[0m Exported Flight Recorder bundle to \x1b[1m{:?}\x1b[0m in \x1b[36m{:?}\x1b[0m",
                 stats.output_path,
                 start.elapsed()
             );
@@ -614,7 +614,7 @@ pub fn run_cli() -> anyhow::Result<()> {
             let start = Instant::now();
             let stats = FlightRecorder::replay_bundle(&bundle, &path, step)?;
             println!(
-                "\x1b[32m✔ [Savepoint]\x1b[0m ⏪ Replayed bundle \x1b[1m{}\x1b[0m (Step #{}) into \x1b[1m{:?}\x1b[0m in \x1b[36m{:?}\x1b[0m ({} files restored)",
+                "\x1b[32m[savepoint]\x1b[0m Replayed bundle \x1b[1m{}\x1b[0m (Step #{}) into \x1b[1m{:?}\x1b[0m in \x1b[36m{:?}\x1b[0m ({} files restored)",
                 stats.transaction_id,
                 stats.replayed_step,
                 path,
