@@ -72,9 +72,28 @@ impl ShadowEngine {
             source: e,
         })?;
 
+        let hooks = crate::hooks::LifecycleHooks::load(&ws);
+        if let Some(h) = &hooks {
+            let _ = crate::hooks::LifecycleHooks::run_hooks(
+                &ws,
+                "pre_checkpoint",
+                &h.pre_checkpoint,
+                &[("SAVEPOINT_TX_ID", tx_id.as_str()), ("SAVEPOINT_STEP", "0")],
+            );
+        }
+
         // Snapshot 0: baseline pristine state (skips .git and .savepoint)
         let cp0_path = snapshots_dir.join("cp_0");
         clone_workspace(&ws, &cp0_path)?;
+
+        if let Some(h) = &hooks {
+            let _ = crate::hooks::LifecycleHooks::run_hooks(
+                &ws,
+                "post_checkpoint",
+                &h.post_checkpoint,
+                &[("SAVEPOINT_TX_ID", tx_id.as_str()), ("SAVEPOINT_STEP", "0")],
+            );
+        }
 
         let content_hash = compute_checkpoint_hash(None, "main", &[]);
         let initial_cp = Checkpoint {
@@ -110,6 +129,20 @@ impl ShadowEngine {
         let snapshots_dir = tx.shadow_root.join("snapshots");
         let current_cp_path = snapshots_dir.join(format!("cp_{}", next_step));
 
+        let hooks = crate::hooks::LifecycleHooks::load(&tx.workspace_root);
+        let next_step_str = next_step.to_string();
+        if let Some(h) = &hooks {
+            let _ = crate::hooks::LifecycleHooks::run_hooks(
+                &tx.workspace_root,
+                "pre_checkpoint",
+                &h.pre_checkpoint,
+                &[
+                    ("SAVEPOINT_TX_ID", tx.id.as_str()),
+                    ("SAVEPOINT_STEP", &next_step_str),
+                ],
+            );
+        }
+
         // Take snapshot of current workspace state
         clone_workspace(&tx.workspace_root, &current_cp_path)?;
 
@@ -136,6 +169,18 @@ impl ShadowEngine {
 
         tx.record_checkpoint_in_branch(cp.clone());
         Self::save_metadata(tx)?;
+
+        if let Some(h) = &hooks {
+            let _ = crate::hooks::LifecycleHooks::run_hooks(
+                &tx.workspace_root,
+                "post_checkpoint",
+                &h.post_checkpoint,
+                &[
+                    ("SAVEPOINT_TX_ID", tx.id.as_str()),
+                    ("SAVEPOINT_STEP", &next_step_str),
+                ],
+            );
+        }
 
         Ok(cp)
     }
@@ -212,6 +257,20 @@ impl ShadowEngine {
             )?;
         }
 
+        let hooks = crate::hooks::LifecycleHooks::load(&tx.workspace_root);
+        let target_step_str = target_step.to_string();
+        if let Some(h) = &hooks {
+            let _ = crate::hooks::LifecycleHooks::run_hooks(
+                &tx.workspace_root,
+                "pre_rollback",
+                &h.pre_rollback,
+                &[
+                    ("SAVEPOINT_TX_ID", tx.id.as_str()),
+                    ("SAVEPOINT_TARGET_STEP", &target_step_str),
+                ],
+            );
+        }
+
         // 2. Perform delta rollback / fast-forward to target_step via CoW:
         let deltas = compute_deltas(&target_cp.snapshot_path, &tx.workspace_root)?;
         apply_snapshot_deltas(&target_cp.snapshot_path, &tx.workspace_root, &deltas)?;
@@ -219,6 +278,18 @@ impl ShadowEngine {
         // 3. DO NOT PRUNE! Update current_step_index so the entire timeline remains intact!
         tx.current_step_index = Some(target_step);
         Self::save_metadata(tx)?;
+
+        if let Some(h) = &hooks {
+            let _ = crate::hooks::LifecycleHooks::run_hooks(
+                &tx.workspace_root,
+                "post_rollback",
+                &h.post_rollback,
+                &[
+                    ("SAVEPOINT_TX_ID", tx.id.as_str()),
+                    ("SAVEPOINT_TARGET_STEP", &target_step_str),
+                ],
+            );
+        }
 
         Ok(())
     }
@@ -253,6 +324,49 @@ impl ShadowEngine {
         })?;
 
         compute_deltas(&active_cp.snapshot_path, &tx.workspace_root)
+    }
+
+    /// Computes differences between two arbitrary checkpoints in the transaction.
+    pub fn diff_checkpoints(
+        tx: &Transaction,
+        from_step: usize,
+        to_step: usize,
+    ) -> Result<Vec<FileDelta>> {
+        let cp_from = tx
+            .checkpoints
+            .iter()
+            .find(|c| c.step_index == from_step)
+            .ok_or_else(|| SavepointError::CheckpointNotFound(from_step, tx.id.to_string()))?;
+        let cp_to = tx
+            .checkpoints
+            .iter()
+            .find(|c| c.step_index == to_step)
+            .ok_or_else(|| SavepointError::CheckpointNotFound(to_step, tx.id.to_string()))?;
+
+        compute_deltas(&cp_from.snapshot_path, &cp_to.snapshot_path)
+    }
+
+    /// Computes differences between a specific checkpoint and the current live workspace.
+    pub fn diff_checkpoint_to_live(
+        tx: &Transaction,
+        from_step: usize,
+    ) -> Result<Vec<FileDelta>> {
+        let cp_from = tx
+            .checkpoints
+            .iter()
+            .find(|c| c.step_index == from_step)
+            .ok_or_else(|| SavepointError::CheckpointNotFound(from_step, tx.id.to_string()))?;
+
+        compute_deltas(&cp_from.snapshot_path, &tx.workspace_root)
+    }
+
+    /// Squashes the active transaction into a Git commit in the workspace repository.
+    pub fn squash_to_git(
+        tx: &mut Transaction,
+        message: Option<&str>,
+        up_to_step: Option<usize>,
+    ) -> Result<crate::git_bridge::GitCommitResult> {
+        crate::git_bridge::squash_transaction_to_git(tx, message, up_to_step)
     }
 
     /// Commits the active transaction, cementing changes.

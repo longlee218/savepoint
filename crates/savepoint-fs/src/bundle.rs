@@ -57,6 +57,17 @@ impl FlightRecorder {
         Self::export_bundle_with_step(workspace_root, output_path, None)
     }
 
+    /// Reads and inspects a .spbundle file or replay URI without modifying any workspace files.
+    pub fn inspect_bundle(bundle_path_or_uri: &Path) -> Result<FlightBundle> {
+        let bundle_file = resolve_bundle_path_or_uri(bundle_path_or_uri)?;
+        let json = fs::read_to_string(&bundle_file).map_err(|e| SavepointError::Io {
+            path: bundle_file.clone(),
+            source: e,
+        })?;
+        let bundle: FlightBundle = serde_json::from_str(&json)?;
+        Ok(bundle)
+    }
+
     /// Exports a `.spbundle` file with an optional `pinned_step` (`sp share --step <N>`) and registers
     /// a local replay URI (`sp://replay/<short_id>`) under `~/.savepoint/bundles/`.
     pub fn export_bundle_with_step(

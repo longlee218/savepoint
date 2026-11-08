@@ -58,6 +58,9 @@ pub enum Commands {
     },
     /// View active transaction status and checkpoint timeline
     Status {
+        /// Output status as JSON
+        #[arg(short, long)]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -73,8 +76,29 @@ pub enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
-    /// Show file deltas since previous checkpoint
+    /// Squash active Savepoint transaction into a real Git commit
+    #[command(alias = "squash")]
+    ToGit {
+        /// Optional custom Git commit message
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Optional checkpoint step index to squash up to (defaults to active step)
+        #[arg(short, long)]
+        step: Option<usize>,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show file deltas between checkpoints or since previous checkpoint
     Diff {
+        /// Starting step index (optional)
+        #[arg(long)]
+        from: Option<usize>,
+        /// Target step index (optional)
+        #[arg(long)]
+        to: Option<usize>,
+        /// Output diff as JSON
+        #[arg(short, long)]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -139,6 +163,9 @@ pub enum Commands {
         /// Checkpoint step index to replay (defaults to pinned or active step in bundle)
         #[arg(short, long)]
         step: Option<usize>,
+        /// Inspect and preview bundle contents without modifying workspace
+        #[arg(long)]
+        dry_run: bool,
         /// Target directory to replay into
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
@@ -258,6 +285,10 @@ pub fn run_cli() -> anyhow::Result<()> {
                         "replay",
                         "---\ndescription: [Savepoint] Replay a .spbundle file or sp://replay/<id> URI into the workspace\n---\n!sp replay $ARGUMENTS\n",
                     ),
+                    (
+                        "to-git",
+                        "---\ndescription: [Savepoint] Squash active transaction steps into a real Git commit\n---\n!sp to-git -m \"$ARGUMENTS\"\n",
+                    ),
                 ];
 
                 for (name, content) in &commands {
@@ -276,6 +307,7 @@ pub fn run_cli() -> anyhow::Result<()> {
                 println!("    \x1b[36m/sp:timeline\x1b[0m    Open interactive TUI timeline");
                 println!("    \x1b[36m/sp:diff\x1b[0m        Show uncommitted workspace changes");
                 println!("    \x1b[36m/sp:status\x1b[0m      Show active transaction status");
+                println!("    \x1b[36m/sp:to-git [msg]\x1b[0m Squash transaction into Git commit");
             }
         },
         Commands::Run { command } => {
@@ -398,14 +430,23 @@ pub fn run_cli() -> anyhow::Result<()> {
             println!("  Storage   : {:?}", tx.shadow_root);
             println!("  Baseline  : Step #0 captured via CoW.");
         }
-        Commands::Status { path } => {
+        Commands::Status { json, path } => {
             let tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    println!("\x1b[33mNo active Savepoint transaction in {:?}\x1b[0m", path);
+                    if json {
+                        println!("null");
+                    } else {
+                        println!("\x1b[33mNo active Savepoint transaction in {:?}\x1b[0m", path);
+                    }
                     return Ok(());
                 }
             };
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&tx)?);
+                return Ok(());
+            }
 
             println!("\x1b[1mSavepoint Transaction: {}\x1b[0m", tx.id);
             println!("  Status    : {:?}", tx.status);
@@ -461,7 +502,26 @@ pub fn run_cli() -> anyhow::Result<()> {
 
             println!("\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m committed in \x1b[36m{:?}\x1b[0m", tx.id, elapsed);
         }
-        Commands::Diff { path } => {
+        Commands::ToGit { message, step, path } => {
+            let mut tx = match ShadowEngine::load_active_transaction(&path)? {
+                Some(tx) => tx,
+                None => {
+                    eprintln!("\x1b[31merror: no active Savepoint transaction found in {:?}\x1b[0m", path);
+                    return Ok(());
+                }
+            };
+
+            let start = Instant::now();
+            let res = ShadowEngine::squash_to_git(&mut tx, message.as_deref(), step)?;
+            println!(
+                "\x1b[32m[savepoint]\x1b[0m Squashed {} step(s) into Git commit \x1b[1m{}\x1b[0m in \x1b[36m{:?}\x1b[0m",
+                res.steps_squashed, res.commit_hash, start.elapsed()
+            );
+            println!("  Summary    : {}", res.commit_message.lines().next().unwrap_or(""));
+            println!("  Files      : {} file delta(s)", res.files_changed);
+            println!("  Status     : Savepoint transaction committed; Git working tree in sync.");
+        }
+        Commands::Diff { from, to, json, path } => {
             let tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
@@ -470,12 +530,35 @@ pub fn run_cli() -> anyhow::Result<()> {
                 }
             };
 
-            let live_deltas = ShadowEngine::compute_live_deltas(&tx)?;
-            if live_deltas.is_empty() {
-                println!("\x1b[32mWorking tree clean (no changes since Step #{:02}).\x1b[0m", tx.active_step());
+            let (title, deltas) = match (from, to) {
+                (Some(f), Some(t)) => (
+                    format!("Changes from Step #{:02} to Step #{:02}", f, t),
+                    ShadowEngine::diff_checkpoints(&tx, f, t)?,
+                ),
+                (Some(f), None) => (
+                    format!("Changes from Step #{:02} to Live Workspace", f),
+                    ShadowEngine::diff_checkpoint_to_live(&tx, f)?,
+                ),
+                (None, Some(t)) => (
+                    format!("Changes from Baseline #00 to Step #{:02}", t),
+                    ShadowEngine::diff_checkpoints(&tx, 0, t)?,
+                ),
+                (None, None) => (
+                    format!("Uncommitted changes since Step #{:02}", tx.active_step()),
+                    ShadowEngine::compute_live_deltas(&tx)?,
+                ),
+            };
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&deltas)?);
+                return Ok(());
+            }
+
+            if deltas.is_empty() {
+                println!("\x1b[32mWorking tree clean (no changes detected for query).\x1b[0m");
             } else {
-                println!("\x1b[1mUncommitted changes since Step #{:02} ({} files):\x1b[0m", tx.active_step(), live_deltas.len());
-                for delta in &live_deltas {
+                println!("\x1b[1m{} ({} files):\x1b[0m", title, deltas.len());
+                for delta in &deltas {
                     match delta.kind {
                         ChangeKind::Created => println!("  \x1b[32mA  {}\x1b[0m", delta.relative_path.display()),
                         ChangeKind::Modified => println!("  \x1b[33mM  {}\x1b[0m", delta.relative_path.display()),
@@ -610,7 +693,37 @@ pub fn run_cli() -> anyhow::Result<()> {
                 stats.scrubbed_files_count, stats.scrubbed_secrets_count
             );
         }
-        Commands::Replay { bundle, step, path } => {
+        Commands::Replay { bundle, step, dry_run, path } => {
+            if dry_run {
+                let flight_bundle = FlightRecorder::inspect_bundle(&bundle)?;
+                println!("\x1b[1m[DRY-RUN] Flight Recorder Bundle Inspection\x1b[0m");
+                println!("  Transaction ID  : {}", flight_bundle.transaction.id);
+                println!("  Created At      : {}", flight_bundle.created_at);
+                println!("  Checkpoints     : {}", flight_bundle.transaction.checkpoints.len());
+                if let Some(pinned) = flight_bundle.pinned_step {
+                    println!("  Pinned Step     : #{}", pinned);
+                }
+                let target_step = step
+                    .or(flight_bundle.pinned_step)
+                    .unwrap_or(flight_bundle.transaction.active_step());
+                println!("  Target Step     : #{}", target_step);
+                if let Some(files) = flight_bundle.step_files.get(&target_step) {
+                    println!("  Files at Step #{:02} ({} files):", target_step, files.len());
+                    for (rel, state) in files {
+                        match state {
+                            savepoint_fs::BundleFileState::Present { .. } => {
+                                println!("    \x1b[32m+ {}\x1b[0m", rel);
+                            }
+                            savepoint_fs::BundleFileState::Deleted => {
+                                println!("    \x1b[31m- {}\x1b[0m (deleted)", rel);
+                            }
+                        }
+                    }
+                }
+                println!("\x1b[33m[DRY-RUN] No files were touched in workspace.\x1b[0m");
+                return Ok(());
+            }
+
             let start = Instant::now();
             let stats = FlightRecorder::replay_bundle(&bundle, &path, step)?;
             println!(
