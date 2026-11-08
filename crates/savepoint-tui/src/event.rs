@@ -1,18 +1,21 @@
+use crate::app::{TimelineAction, TimelineApp, ViewMode};
+use crate::ui::render_ui;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use savepoint_core::{FileDelta, Transaction};
 use std::io::stdout;
 use std::time::Duration;
-use savepoint_core::{FileDelta, Transaction};
-use crate::app::{TimelineAction, TimelineApp, ViewMode};
-use crate::ui::render_ui;
 
 /// Runs the interactive TUI timeline for the provided transaction and live deltas.
 /// Returns the action chosen by the user (`Rewind(step)`, `Commit`, or `Cancel`).
-pub fn run_timeline(tx: Transaction, live_deltas: Vec<FileDelta>) -> anyhow::Result<TimelineAction> {
+pub fn run_timeline(
+    tx: Transaction,
+    live_deltas: Vec<FileDelta>,
+) -> anyhow::Result<TimelineAction> {
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -66,14 +69,10 @@ fn run_loop<B: ratatui::backend::Backend>(
                             KeyCode::PageUp | KeyCode::Char('K') | KeyCode::Char('[') => {
                                 app.scroll_details_up();
                             }
-                            KeyCode::Char('d')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 app.scroll_details_down();
                             }
-                            KeyCode::Char('u')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 app.scroll_details_up();
                             }
                             KeyCode::Char('u') => app.request_undo(),

@@ -28,12 +28,9 @@ fn test_speculative_execution_auto_convergence() {
         setup_commands: vec!["echo 'exit 0' > calc.sh".to_string()],
     };
 
-    let summary = SpeculativeEngine::evaluate_and_converge(
-        ws_path,
-        vec![cand_a, cand_b],
-        "sh calc.sh",
-    )
-    .expect("speculate");
+    let summary =
+        SpeculativeEngine::evaluate_and_converge(ws_path, vec![cand_a, cand_b], "sh calc.sh")
+            .expect("speculate");
 
     assert_eq!(summary.total_candidates, 2);
     assert_eq!(summary.winner_branch, Some("strategy_optimal".to_string()));
@@ -258,4 +255,3 @@ fn test_first_pass_wins_aborts_mid_flight_before_validation_and_leaves_zero_orph
         );
     }
 }
-

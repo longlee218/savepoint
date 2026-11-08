@@ -1,19 +1,16 @@
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
-use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
 use savepoint_fs::{FlightRecorder, ShadowEngine};
 use savepoint_speculate::{
     ConvergencePolicy, SpeculationConfig, SpeculativeCandidate, SpeculativeEngine,
 };
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 
 pub struct McpHandler;
 
 impl McpHandler {
     pub fn handle_request(req: JsonRpcRequest) -> Option<JsonRpcResponse> {
-        let id = match req.id {
-            Some(id) => id,
-            None => return None, // Notification, no response needed
-        };
+        let id = req.id?;
 
         match req.method.as_str() {
             "ping" => Some(JsonRpcResponse::success(id, json!({}))),
@@ -231,8 +228,13 @@ impl McpHandler {
                     let rolled = ShadowEngine::rewind_previous(&mut tx)
                         .map_err(|e| format!("Failed to rewind previous: {}", e))?;
                     match rolled {
-                        Some(target) => Ok(format!("Workspace rolled back 1 step to checkpoint #{}.", target)),
-                        None => Ok("Already at baseline checkpoint #0. Nothing to rewind.".to_string()),
+                        Some(target) => Ok(format!(
+                            "Workspace rolled back 1 step to checkpoint #{}.",
+                            target
+                        )),
+                        None => {
+                            Ok("Already at baseline checkpoint #0. Nothing to rewind.".to_string())
+                        }
                     }
                 }
             }
@@ -258,7 +260,10 @@ impl McpHandler {
                     .ok_or_else(|| "Missing required 'branch' argument".to_string())?;
                 let step = ShadowEngine::switch_branch(&mut tx, branch)
                     .map_err(|e| format!("Failed to switch branch: {}", e))?;
-                Ok(format!("Switched to branch '{}' at step #{}.", branch, step))
+                Ok(format!(
+                    "Switched to branch '{}' at step #{}.",
+                    branch, step
+                ))
             }
             "savepoint_merge" => {
                 let mut tx = Self::get_active_tx(&ws_path)?;
@@ -279,8 +284,9 @@ impl McpHandler {
             }
             "savepoint_speculate" => {
                 let candidates_val = args.get("candidates").ok_or("Missing 'candidates' array")?;
-                let candidates: Vec<SpeculativeCandidate> = serde_json::from_value(candidates_val.clone())
-                    .map_err(|e| format!("Invalid candidates schema: {}", e))?;
+                let candidates: Vec<SpeculativeCandidate> =
+                    serde_json::from_value(candidates_val.clone())
+                        .map_err(|e| format!("Invalid candidates schema: {}", e))?;
                 let validation_cmd = args
                     .get("validation_cmd")
                     .and_then(|v| v.as_str())
@@ -299,9 +305,9 @@ impl McpHandler {
                 let max_concurrency = match args.get("max_concurrency") {
                     None => None,
                     Some(v) => {
-                        let c = v
-                            .as_u64()
-                            .ok_or_else(|| "Invalid 'max_concurrency': expected positive integer".to_string())?;
+                        let c = v.as_u64().ok_or_else(|| {
+                            "Invalid 'max_concurrency': expected positive integer".to_string()
+                        })?;
                         if c == 0 {
                             return Err("Invalid 'max_concurrency': must be >= 1".to_string());
                         }
@@ -315,8 +321,13 @@ impl McpHandler {
                     ..Default::default()
                 };
 
-                let summary = SpeculativeEngine::evaluate_with_config(&ws_path, candidates, validation_cmd, cfg)
-                    .map_err(|e| format!("Speculative execution error: {}", e))?;
+                let summary = SpeculativeEngine::evaluate_with_config(
+                    &ws_path,
+                    candidates,
+                    validation_cmd,
+                    cfg,
+                )
+                .map_err(|e| format!("Speculative execution error: {}", e))?;
 
                 Ok(serde_json::to_string_pretty(&summary).unwrap_or_default())
             }
@@ -326,7 +337,10 @@ impl McpHandler {
                     .and_then(|o| o.as_str())
                     .map(PathBuf::from)
                     .unwrap_or_else(|| ws_path.join("savepoint.spbundle"));
-                let step = args.get("step").and_then(|s| s.as_u64()).map(|s| s as usize);
+                let step = args
+                    .get("step")
+                    .and_then(|s| s.as_u64())
+                    .map(|s| s as usize);
                 let stats = FlightRecorder::export_bundle_with_step(&ws_path, &output, step)
                     .map_err(|e| format!("Failed to export .spbundle: {}", e))?;
                 Ok(serde_json::to_string_pretty(&stats).unwrap_or_default())
@@ -342,7 +356,10 @@ impl McpHandler {
                     .and_then(|t| t.as_str())
                     .map(PathBuf::from)
                     .unwrap_or_else(|| ws_path.clone());
-                let step = args.get("step").and_then(|s| s.as_u64()).map(|s| s as usize);
+                let step = args
+                    .get("step")
+                    .and_then(|s| s.as_u64())
+                    .map(|s| s as usize);
                 let stats = FlightRecorder::replay_bundle(&bundle, &target_path, step)
                     .map_err(|e| format!("Failed to replay .spbundle: {}", e))?;
                 Ok(serde_json::to_string_pretty(&stats).unwrap_or_default())
@@ -367,6 +384,8 @@ impl McpHandler {
     fn get_active_tx(ws: &Path) -> Result<savepoint_core::Transaction, String> {
         ShadowEngine::load_active_transaction(ws)
             .map_err(|e| format!("Error checking active transaction: {}", e))?
-            .ok_or_else(|| "No active Savepoint transaction found. Call 'savepoint_begin' first.".to_string())
+            .ok_or_else(|| {
+                "No active Savepoint transaction found. Call 'savepoint_begin' first.".to_string()
+            })
     }
 }

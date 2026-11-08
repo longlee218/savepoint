@@ -1,24 +1,19 @@
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 use savepoint_core::{FileDelta, Result, SavepointError};
 use savepoint_fs::ShadowEngine;
 use savepoint_sandbox::{Sandbox, SandboxConfig};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ConvergencePolicy {
     /// Run all candidates (up to max concurrency) and pick the fastest/cleanest passing candidate.
+    #[default]
     BestPassWins,
     /// Stop starting new queued candidates as soon as the first candidate passes validation.
     FirstPassWins,
-}
-
-impl Default for ConvergencePolicy {
-    fn default() -> Self {
-        Self::BestPassWins
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,7 +211,8 @@ impl SpeculativeEngine {
                             exit_code: -1,
                             duration_ms: 0,
                             stdout: String::new(),
-                            stderr: "Skipped: earlier candidate already passed validation".to_string(),
+                            stderr: "Skipped: earlier candidate already passed validation"
+                                .to_string(),
                             modified_files_count: 0,
                             deltas: Vec::new(),
                             port_offset,
@@ -296,13 +292,7 @@ impl SpeculativeEngine {
                 .iter()
                 .enumerate()
                 .filter(|(_, o)| o.report.passed && o.sandbox.is_some())
-                .min_by_key(|(_, o)| {
-                    (
-                        o.report.duration_ms,
-                        o.report.modified_files_count,
-                        o.idx,
-                    )
-                })
+                .min_by_key(|(_, o)| (o.report.duration_ms, o.report.modified_files_count, o.idx))
                 .map(|(pos, _)| pos),
         };
 
@@ -394,7 +384,8 @@ fn evaluate_single_candidate(
             setup_ok = false;
             skipped_mid_flight = true;
             setup_exit = -1;
-            failure_msg = "Aborted mid-flight: another candidate already passed validation".to_string();
+            failure_msg =
+                "Aborted mid-flight: another candidate already passed validation".to_string();
             break;
         }
         let output = sandbox.run_command("sh", &["-c", cmd_str])?;

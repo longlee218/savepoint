@@ -135,7 +135,12 @@ impl Transaction {
         if self.checkpoints.is_empty() {
             0
         } else {
-            self.checkpoints.iter().map(|c| c.step_index).max().unwrap_or(0) + 1
+            self.checkpoints
+                .iter()
+                .map(|c| c.step_index)
+                .max()
+                .unwrap_or(0)
+                + 1
         }
     }
 
@@ -160,7 +165,9 @@ impl Transaction {
 
     pub fn fork_branch(&mut self, new_branch: &str) -> crate::error::Result<()> {
         if self.branches.contains_key(new_branch) {
-            return Err(crate::error::SavepointError::BranchAlreadyExists(new_branch.to_string()));
+            return Err(crate::error::SavepointError::BranchAlreadyExists(
+                new_branch.to_string(),
+            ));
         }
         let current_step = self.active_step();
         self.branches.insert(new_branch.to_string(), current_step);

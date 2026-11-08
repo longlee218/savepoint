@@ -35,7 +35,9 @@ impl TimelineApp {
 
         // 1. If there are live uncommitted changes, show at top
         if !live_deltas.is_empty() {
-            rows.push(TimelineRow::Live { deltas: live_deltas });
+            rows.push(TimelineRow::Live {
+                deltas: live_deltas,
+            });
         }
 
         // 2. Add saved checkpoints (newest first for natural reading)
@@ -146,11 +148,9 @@ impl TimelineApp {
                 TimelineRow::Live { .. } => {
                     // Selecting Enter/r on the uncommitted worktree row offers to restore HEAD
                     let head_step = self.tx.active_step();
-                    if let Some(idx) = self
-                        .rows
-                        .iter()
-                        .position(|r| matches!(r, TimelineRow::Saved(cp) if cp.step_index == head_step))
-                    {
+                    if let Some(idx) = self.rows.iter().position(
+                        |r| matches!(r, TimelineRow::Saved(cp) if cp.step_index == head_step),
+                    ) {
                         self.selected_index = idx;
                         self.delta_scroll = 0;
                     }

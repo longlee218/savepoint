@@ -1,7 +1,7 @@
-use std::fs;
-use serde_json::json;
 use savepoint_mcp::protocol::JsonRpcRequest;
 use savepoint_mcp::McpHandler;
+use serde_json::json;
+use std::fs;
 
 #[test]
 fn test_mcp_tools_lifecycle_and_bundle_export_replay() {
@@ -122,4 +122,3 @@ fn test_mcp_tools_lifecycle_and_bundle_export_replay() {
         "Expected invalid policy to return JSON-RPC error"
     );
 }
-

@@ -28,8 +28,14 @@ fn test_git_bridge_squash_to_git() {
 
     // Baseline commit in git
     fs::write(ws.join("README.md"), "# Project\n").unwrap();
-    let _ = Command::new("git").args(["add", "README.md"]).current_dir(&ws).status();
-    let _ = Command::new("git").args(["commit", "-m", "initial commit"]).current_dir(&ws).status();
+    let _ = Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(&ws)
+        .status();
+    let _ = Command::new("git")
+        .args(["commit", "-m", "initial commit"])
+        .current_dir(&ws)
+        .status();
 
     // 2. Start Savepoint transaction
     let mut tx = ShadowEngine::begin_transaction(&ws).unwrap();
@@ -43,7 +49,8 @@ fn test_git_bridge_squash_to_git() {
     ShadowEngine::checkpoint(&mut tx, Some("Add file2"), None).unwrap();
 
     // 3. Squash transaction to git
-    let git_res = ShadowEngine::squash_to_git(&mut tx, Some("feat: add file1 and file2"), None).unwrap();
+    let git_res =
+        ShadowEngine::squash_to_git(&mut tx, Some("feat: add file1 and file2"), None).unwrap();
     assert!(!git_res.commit_hash.is_empty());
     assert_eq!(git_res.steps_squashed, 2);
 

@@ -30,8 +30,14 @@ post_rollback:
 
     // 2. Start transaction
     let mut tx = ShadowEngine::begin_transaction(&ws).unwrap();
-    assert!(ws.join("hook_pre_cp.txt").exists(), "Pre-checkpoint hook should have executed on step 0");
-    assert!(ws.join("hook_post_cp.txt").exists(), "Post-checkpoint hook should have executed on step 0");
+    assert!(
+        ws.join("hook_pre_cp.txt").exists(),
+        "Pre-checkpoint hook should have executed on step 0"
+    );
+    assert!(
+        ws.join("hook_post_cp.txt").exists(),
+        "Post-checkpoint hook should have executed on step 0"
+    );
 
     // Clean up marker files
     let _ = fs::remove_file(ws.join("hook_pre_cp.txt"));
@@ -48,6 +54,12 @@ post_rollback:
     assert!(!ws.join("hook_post_rb.txt").exists());
 
     ShadowEngine::rewind(&mut tx, 0).unwrap();
-    assert!(ws.join(".sp-tmp").join("hook_pre_rb.txt").exists(), "Pre-rollback hook should run");
-    assert!(ws.join("hook_post_rb.txt").exists(), "Post-rollback hook should run");
+    assert!(
+        ws.join(".sp-tmp").join("hook_pre_rb.txt").exists(),
+        "Pre-rollback hook should run"
+    );
+    assert!(
+        ws.join("hook_post_rb.txt").exists(),
+        "Post-rollback hook should run"
+    );
 }

@@ -120,7 +120,10 @@ fn test_ui_renders_clean_english_without_vietnamese_or_emoji_slop() {
     // Must contain clean English headers & labels
     assert!(rendered.contains("SAVEPOINT"), "Missing SAVEPOINT header");
     assert!(rendered.contains("TIMELINE"), "Missing TIMELINE pane title");
-    assert!(rendered.contains("INSPECTOR"), "Missing INSPECTOR pane title");
+    assert!(
+        rendered.contains("INSPECTOR"),
+        "Missing INSPECTOR pane title"
+    );
     assert!(rendered.contains("WORKTREE"), "Missing WORKTREE row");
     assert!(rendered.contains("[HEAD]"), "Missing [HEAD] badge");
 

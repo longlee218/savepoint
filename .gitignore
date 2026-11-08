@@ -1,3 +1,35 @@
-target/
+# Build artifacts
+/target/
 **/*.rs.bk
+
+# Operating system files
 .DS_Store
+Thumbs.db
+
+# Savepoint runtime and shadow directories
+.savepoint/
+.savepoint-spool/
+.sp-tmp/
+*.spbundle
+
+# Environment secrets and credentials (protect against accidental commit)
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.sample
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+credentials.json
+
+# Dependencies and caches
+node_modules/
+.venv/
+venv/
+__pycache__/
+.next/
+.gradle/
+.turbo/
+.cache/

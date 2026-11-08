@@ -1,13 +1,14 @@
+use crate::clone::{clone_tree, clone_workspace};
+use crate::diff::compute_deltas;
+use chrono::Utc;
+use savepoint_core::{
+    ChangeKind, Checkpoint, FileDelta, Result, SavepointError, Transaction, TransactionId,
+    TransactionStatus,
+};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use chrono::Utc;
-use sha2::{Digest, Sha256};
-use savepoint_core::{
-    ChangeKind, Checkpoint, FileDelta, Result, SavepointError, Transaction, TransactionId, TransactionStatus,
-};
-use crate::clone::{clone_tree, clone_workspace};
-use crate::diff::compute_deltas;
 
 pub struct ShadowEngine;
 
@@ -57,10 +58,12 @@ impl ShadowEngine {
     /// Begins a new transaction for the given `workspace_root`.
     /// Immediately creates Snapshot 0 (`cp_0`) capturing the pristine state.
     pub fn begin_transaction(workspace_root: &Path) -> Result<Transaction> {
-        let ws = workspace_root.canonicalize().map_err(|e| SavepointError::Io {
-            path: workspace_root.to_path_buf(),
-            source: e,
-        })?;
+        let ws = workspace_root
+            .canonicalize()
+            .map_err(|e| SavepointError::Io {
+                path: workspace_root.to_path_buf(),
+                source: e,
+            })?;
 
         let tx_id = TransactionId::new();
         let ws_storage = Self::resolve_storage_dir(&ws);
@@ -122,7 +125,10 @@ impl ShadowEngine {
         summary: Option<&str>,
     ) -> Result<Checkpoint> {
         if tx.status != TransactionStatus::Active {
-            return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
+            return Err(SavepointError::TransactionFinished(
+                tx.id.to_string(),
+                tx.status,
+            ));
         }
 
         let next_step = tx.next_step_index();
@@ -147,9 +153,12 @@ impl ShadowEngine {
         clone_workspace(&tx.workspace_root, &current_cp_path)?;
 
         // Compute deltas from the checkpoint the workspace was based on
-        let base_cp = tx.active_checkpoint().or_else(|| tx.checkpoints.last()).ok_or_else(|| {
-            SavepointError::Other("Transaction has no previous checkpoint".to_string())
-        })?;
+        let base_cp = tx
+            .active_checkpoint()
+            .or_else(|| tx.checkpoints.last())
+            .ok_or_else(|| {
+                SavepointError::Other("Transaction has no previous checkpoint".to_string())
+            })?;
         let parent_step = Some(base_cp.step_index);
         let branch = tx.active_branch.clone();
         let deltas = compute_deltas(&base_cp.snapshot_path, &current_cp_path)?;
@@ -188,7 +197,10 @@ impl ShadowEngine {
     /// Creates a new branch pointing to the current active checkpoint.
     pub fn fork_branch(tx: &mut Transaction, new_branch: &str) -> Result<()> {
         if tx.status != TransactionStatus::Active {
-            return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
+            return Err(SavepointError::TransactionFinished(
+                tx.id.to_string(),
+                tx.status,
+            ));
         }
         tx.fork_branch(new_branch)?;
         Self::save_metadata(tx)?;
@@ -198,7 +210,10 @@ impl ShadowEngine {
     /// Switches the workspace to the head of the target branch.
     pub fn switch_branch(tx: &mut Transaction, branch_name: &str) -> Result<usize> {
         if tx.status != TransactionStatus::Active {
-            return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
+            return Err(SavepointError::TransactionFinished(
+                tx.id.to_string(),
+                tx.status,
+            ));
         }
         let target_step = tx.switch_branch(branch_name)?;
         Self::rewind(tx, target_step)?;
@@ -212,11 +227,15 @@ impl ShadowEngine {
         target_branch: &str,
     ) -> Result<Checkpoint> {
         if tx.status != TransactionStatus::Active {
-            return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
+            return Err(SavepointError::TransactionFinished(
+                tx.id.to_string(),
+                tx.status,
+            ));
         }
-        let src_head = tx.branch_head(source_branch).cloned().ok_or_else(|| {
-            SavepointError::BranchNotFound(source_branch.to_string())
-        })?;
+        let src_head = tx
+            .branch_head(source_branch)
+            .cloned()
+            .ok_or_else(|| SavepointError::BranchNotFound(source_branch.to_string()))?;
 
         // Switch to target branch if not active
         if tx.active_branch != target_branch {
@@ -235,7 +254,10 @@ impl ShadowEngine {
     /// Non-destructive: preserves all future/past checkpoints and saves live edits if present.
     pub fn rewind(tx: &mut Transaction, target_step: usize) -> Result<()> {
         if tx.status != TransactionStatus::Active {
-            return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
+            return Err(SavepointError::TransactionFinished(
+                tx.id.to_string(),
+                tx.status,
+            ));
         }
 
         let target_cp = tx
@@ -252,7 +274,10 @@ impl ShadowEngine {
         if !live_deltas.is_empty() {
             Self::checkpoint(
                 tx,
-                Some(&format!("Auto-save before switching to Step #{}", target_step)),
+                Some(&format!(
+                    "Auto-save before switching to Step #{}",
+                    target_step
+                )),
                 None,
             )?;
         }
@@ -319,9 +344,9 @@ impl ShadowEngine {
 
     /// Computes differences between the active checkpoint and the current live workspace.
     pub fn compute_live_deltas(tx: &Transaction) -> Result<Vec<FileDelta>> {
-        let active_cp = tx.active_checkpoint().ok_or_else(|| {
-            SavepointError::Other("Transaction has no checkpoints".to_string())
-        })?;
+        let active_cp = tx
+            .active_checkpoint()
+            .ok_or_else(|| SavepointError::Other("Transaction has no checkpoints".to_string()))?;
 
         compute_deltas(&active_cp.snapshot_path, &tx.workspace_root)
     }
@@ -347,10 +372,7 @@ impl ShadowEngine {
     }
 
     /// Computes differences between a specific checkpoint and the current live workspace.
-    pub fn diff_checkpoint_to_live(
-        tx: &Transaction,
-        from_step: usize,
-    ) -> Result<Vec<FileDelta>> {
+    pub fn diff_checkpoint_to_live(tx: &Transaction, from_step: usize) -> Result<Vec<FileDelta>> {
         let cp_from = tx
             .checkpoints
             .iter()
@@ -372,7 +394,10 @@ impl ShadowEngine {
     /// Commits the active transaction, cementing changes.
     pub fn commit(tx: &mut Transaction) -> Result<()> {
         if tx.status != TransactionStatus::Active {
-            return Err(SavepointError::TransactionFinished(tx.id.to_string(), tx.status));
+            return Err(SavepointError::TransactionFinished(
+                tx.id.to_string(),
+                tx.status,
+            ));
         }
 
         tx.status = TransactionStatus::Committed;
@@ -383,10 +408,12 @@ impl ShadowEngine {
 
     /// Loads an existing active transaction from a workspace directory.
     pub fn load_active_transaction(workspace_root: &Path) -> Result<Option<Transaction>> {
-        let ws = workspace_root.canonicalize().map_err(|e| SavepointError::Io {
-            path: workspace_root.to_path_buf(),
-            source: e,
-        })?;
+        let ws = workspace_root
+            .canonicalize()
+            .map_err(|e| SavepointError::Io {
+                path: workspace_root.to_path_buf(),
+                source: e,
+            })?;
 
         let ws_storage = Self::resolve_storage_dir(&ws);
 
@@ -451,10 +478,12 @@ impl ShadowEngine {
             return Ok(Some(active));
         }
 
-        let ws = workspace_root.canonicalize().map_err(|e| SavepointError::Io {
-            path: workspace_root.to_path_buf(),
-            source: e,
-        })?;
+        let ws = workspace_root
+            .canonicalize()
+            .map_err(|e| SavepointError::Io {
+                path: workspace_root.to_path_buf(),
+                source: e,
+            })?;
         let ws_storage = Self::resolve_storage_dir(&ws);
         let tx_base = ws_storage.join("transactions");
         if !tx_base.exists() {
@@ -598,7 +627,8 @@ fn cleanup_orphaned_sqlite_companions(
     let Some(name) = rel_path.file_name().and_then(|n| n.to_str()) else {
         return;
     };
-    let is_sqlite = name.ends_with(".db") || name.ends_with(".sqlite") || name.ends_with(".sqlite3");
+    let is_sqlite =
+        name.ends_with(".db") || name.ends_with(".sqlite") || name.ends_with(".sqlite3");
     if !is_sqlite {
         return;
     }

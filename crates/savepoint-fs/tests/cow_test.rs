@@ -1,7 +1,7 @@
+use savepoint_fs::clone_tree;
 use std::fs;
 use std::time::Instant;
 use tempfile::tempdir_in;
-use savepoint_fs::clone_tree;
 
 #[test]
 fn test_apfs_cow_clone_and_benchmark() {
@@ -68,7 +68,11 @@ fn test_clone_workspace_skips_git_and_savepoint_and_handles_broken_symlink() {
     std::fs::create_dir_all(ws.join(".savepoint/spool")).unwrap();
     std::fs::create_dir_all(ws.join("src")).unwrap();
     std::fs::write(ws.join("src/lib.rs"), "pub fn ok() {}").unwrap();
-    symlink(Path::new("nonexistent_target"), ws.join("src/dangling_link")).unwrap();
+    symlink(
+        Path::new("nonexistent_target"),
+        ws.join("src/dangling_link"),
+    )
+    .unwrap();
 
     clone_workspace(&ws, &snap).expect("clone_workspace must succeed");
 
@@ -98,7 +102,13 @@ fn test_fallback_copy_preserves_mtime_for_zero_diff() {
     // Set an explicit historical mtime (10 seconds ago) on files and directories
     // so we can verify fallback_copy_tree actually copies mtime rather than stamping now().
     let past = SystemTime::now() - Duration::from_secs(10);
-    for p in [&f, &ro, &pkg_f, &src.join("node_modules/pkg"), &src.join("node_modules")] {
+    for p in [
+        &f,
+        &ro,
+        &pkg_f,
+        &src.join("node_modules/pkg"),
+        &src.join("node_modules"),
+    ] {
         let fh = std::fs::File::open(p).unwrap();
         fh.set_modified(past).unwrap();
     }
@@ -109,14 +119,28 @@ fn test_fallback_copy_preserves_mtime_for_zero_diff() {
 
     fallback_copy_tree(&src, &dst).expect("fallback_copy_tree must succeed");
 
-    for rel in ["data.txt", "readonly.txt", "node_modules", "node_modules/pkg"] {
+    for rel in [
+        "data.txt",
+        "readonly.txt",
+        "node_modules",
+        "node_modules/pkg",
+    ] {
         let m1 = std::fs::symlink_metadata(src.join(rel)).unwrap();
         let m2 = std::fs::symlink_metadata(dst.join(rel)).unwrap();
         assert_eq!(m1.mtime(), m2.mtime(), "mtime mismatch for {}", rel);
-        assert_eq!(m1.mtime_nsec(), m2.mtime_nsec(), "mtime_nsec mismatch for {}", rel);
+        assert_eq!(
+            m1.mtime_nsec(),
+            m2.mtime_nsec(),
+            "mtime_nsec mismatch for {}",
+            rel
+        );
     }
 
     // Also verify compute_deltas between src and fallback-copied dst is 0 deltas!
     let deltas = savepoint_fs::compute_deltas(&src, &dst).unwrap();
-    assert!(deltas.is_empty(), "expected 0 deltas after fallback_copy_tree, got: {:?}", deltas);
+    assert!(
+        deltas.is_empty(),
+        "expected 0 deltas after fallback_copy_tree, got: {:?}",
+        deltas
+    );
 }

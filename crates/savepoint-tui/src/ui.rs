@@ -1,3 +1,4 @@
+use crate::app::{TimelineApp, TimelineRow, ViewMode};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -6,7 +7,6 @@ use ratatui::{
     Frame,
 };
 use savepoint_core::ChangeKind;
-use crate::app::{TimelineApp, TimelineRow, ViewMode};
 
 pub fn render_ui(f: &mut Frame, app: &TimelineApp) {
     let chunks = Layout::default()
@@ -82,10 +82,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &TimelineApp) {
         Span::styled("  │  tree: ", Style::default().fg(Color::DarkGray)),
         Span::styled(worktree_badge, worktree_style),
         Span::styled("  │  tx: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            app.tx.id.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(app.tx.id.to_string(), Style::default().fg(Color::DarkGray)),
     ]);
 
     let p = Paragraph::new(header_line).block(
@@ -127,36 +124,22 @@ fn render_steps_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
                 let line = Line::from(vec![
                     Span::styled(
                         cursor,
-                        row_bg
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
+                        row_bg.fg(Color::Yellow).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         "*   ",
-                        row_bg
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
+                        row_bg.fg(Color::Yellow).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         "WORKTREE ",
-                        row_bg
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
+                        row_bg.fg(Color::Yellow).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         "[DIRTY] ",
-                        row_bg
-                            .fg(Color::Red)
-                            .add_modifier(Modifier::BOLD),
+                        row_bg.fg(Color::Red).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        format!("{:>2}f  ", deltas.len()),
-                        row_bg.fg(Color::Yellow),
-                    ),
-                    Span::styled(
-                        "Uncommitted workspace changes",
-                        row_bg.fg(Color::White),
-                    ),
+                    Span::styled(format!("{:>2}f  ", deltas.len()), row_bg.fg(Color::Yellow)),
+                    Span::styled("Uncommitted workspace changes", row_bg.fg(Color::White)),
                 ]);
                 items.push(ListItem::new(line));
             }
@@ -164,16 +147,12 @@ fn render_steps_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
                 let (tag, tag_style) = if cp.step_index == active_step {
                     (
                         "[HEAD]  ",
-                        row_bg
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
+                        row_bg.fg(Color::Cyan).add_modifier(Modifier::BOLD),
                     )
                 } else if cp.step_index > active_step {
                     (
                         "[AHEAD] ",
-                        row_bg
-                            .fg(Color::Magenta)
-                            .add_modifier(Modifier::BOLD),
+                        row_bg.fg(Color::Magenta).add_modifier(Modifier::BOLD),
                     )
                 } else {
                     ("        ", row_bg.fg(Color::DarkGray))
@@ -191,10 +170,7 @@ fn render_steps_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
                 let time_str = cp.timestamp.format("%H:%M:%S").to_string();
 
                 let line = Line::from(vec![
-                    Span::styled(
-                        cursor,
-                        row_bg.fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(cursor, row_bg.fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                     Span::styled(format!("#{:02} ", cp.step_index), step_style),
                     Span::styled(format!("{} ", time_str), row_bg.fg(Color::DarkGray)),
                     Span::styled(tag, tag_style),
@@ -210,7 +186,11 @@ fn render_steps_list(f: &mut Frame, area: Rect, app: &TimelineApp) {
     }
 
     let total = app.rows.len();
-    let current = if total == 0 { 0 } else { app.selected_index + 1 };
+    let current = if total == 0 {
+        0
+    } else {
+        app.selected_index + 1
+    };
     let title = format!(" TIMELINE [{}/{}] ", current, total);
 
     let list = List::new(items).block(
@@ -352,19 +332,17 @@ fn render_details(f: &mut Frame, area: Rect, app: &TimelineApp) {
         }
     }
 
-    let p = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .title(Span::styled(
-                    " INSPECTOR ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .title(Span::styled(
+                " INSPECTOR ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
 
     f.render_widget(p, area);
 }
@@ -406,10 +384,7 @@ fn render_delta_section<'a>(
             format!("  ~{}", modified),
             Style::default().fg(Color::Yellow),
         ),
-        Span::styled(
-            format!("  -{}", deleted),
-            Style::default().fg(Color::Red),
-        ),
+        Span::styled(format!("  -{}", deleted), Style::default().fg(Color::Red)),
         Span::styled(scroll_hint, Style::default().fg(Color::Cyan)),
     ]));
 
@@ -434,9 +409,7 @@ fn render_delta_section<'a>(
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {}  ", code),
-                Style::default()
-                    .fg(color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 delta.relative_path.display().to_string(),
@@ -553,16 +526,34 @@ fn render_footer(f: &mut Frame, area: Rect) {
         Span::styled("J/K ", key_style),
         Span::raw("scroll files"),
         Span::styled("  │  ", sep_style),
-        Span::styled("Enter/r ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Enter/r ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("restore"),
         Span::styled("  │  ", sep_style),
-        Span::styled("u ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "u ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("undo"),
         Span::styled("  │  ", sep_style),
-        Span::styled("c ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "c ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("commit"),
         Span::styled("  │  ", sep_style),
-        Span::styled("q/Esc ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "q/Esc ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
         Span::raw("quit"),
     ]);
 

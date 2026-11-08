@@ -1,5 +1,5 @@
-use std::fs;
 use savepoint_fs::{FlightRecorder, ShadowEngine};
+use std::fs;
 
 #[test]
 fn test_flight_recorder_export_scrubs_secrets_and_replays_step_accurately() {
@@ -53,8 +53,7 @@ fn test_flight_recorder_export_scrubs_secrets_and_replays_step_accurately() {
     ShadowEngine::commit(&mut tx).unwrap();
 
     // Export bundle with pinned_step = Some(1)
-    let export_stats =
-        FlightRecorder::export_bundle_with_step(&ws, &bundle_path, Some(1)).unwrap();
+    let export_stats = FlightRecorder::export_bundle_with_step(&ws, &bundle_path, Some(1)).unwrap();
     assert!(bundle_path.exists());
     assert_eq!(export_stats.pinned_step, Some(1));
     assert!(

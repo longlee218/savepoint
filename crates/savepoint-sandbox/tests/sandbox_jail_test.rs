@@ -1,6 +1,6 @@
+use savepoint_sandbox::{Sandbox, SandboxConfig};
 use std::fs;
 use std::time::Duration;
-use savepoint_sandbox::{Sandbox, SandboxConfig};
 
 #[test]
 fn test_pgid_kills_background_grandchild_daemons() {
@@ -44,9 +44,11 @@ fn test_command_timeout_kills_hung_process_group() {
     let ws = temp.path();
     fs::write(ws.join("main.rs"), "fn main() {}").unwrap();
 
-    let mut cfg = SandboxConfig::default();
-    cfg.id = Some("timeout_test".to_string());
-    cfg.default_timeout = Some(Duration::from_millis(150));
+    let cfg = SandboxConfig {
+        id: Some("timeout_test".to_string()),
+        default_timeout: Some(Duration::from_millis(150)),
+        ..Default::default()
+    };
 
     let sandbox = Sandbox::create_with_config(ws, cfg).unwrap();
     let out = sandbox.run_command("sh", &["-c", "sleep 30"]).unwrap();
@@ -66,11 +68,13 @@ fn test_env_port_offset_and_shared_cache_virtualization() {
     let ws = temp.path();
     fs::write(ws.join("app.txt"), "v1").unwrap();
 
-    let mut cfg = SandboxConfig::default();
-    cfg.id = Some("env_test".to_string());
-    cfg.port_offset = 7;
-    cfg.base_port = 3000;
-    cfg.share_build_cache = true;
+    let cfg = SandboxConfig {
+        id: Some("env_test".to_string()),
+        port_offset: 7,
+        base_port: 3000,
+        share_build_cache: true,
+        ..Default::default()
+    };
 
     let sandbox = Sandbox::create_with_config(ws, cfg).unwrap();
     let out = sandbox
@@ -137,7 +141,11 @@ fn test_rejects_malicious_sandbox_id_and_drains_large_output_without_deadlock() 
     // 1. Path traversal / invalid sandbox IDs must be rejected
     for bad_id in ["../evil", "/tmp/evil", "foo/bar", "", ".."] {
         let res = Sandbox::create(ws, Some(bad_id));
-        assert!(res.is_err(), "Expected sandbox ID '{}' to be rejected", bad_id);
+        assert!(
+            res.is_err(),
+            "Expected sandbox ID '{}' to be rejected",
+            bad_id
+        );
     }
 
     // 2. Output exceeding OS pipe buffer (128 KiB) with max_output_bytes = 1024 must not deadlock
@@ -184,5 +192,3 @@ fn test_network_egress_guard_and_build_jobs_virtualization() {
     assert_eq!(parts[2], "2");
     assert!(parts[3].contains("-j2"));
 }
-
-

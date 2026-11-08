@@ -27,16 +27,26 @@ fn test_multi_turn_diff_between_steps() {
     // 1. Diff from Step 1 to Step 2
     let diff_1_2 = ShadowEngine::diff_checkpoints(&tx, 1, 2).unwrap();
     assert_eq!(diff_1_2.len(), 2);
-    let mod_a = diff_1_2.iter().find(|d| d.relative_path == std::path::Path::new("file_a.txt")).unwrap();
+    let mod_a = diff_1_2
+        .iter()
+        .find(|d| d.relative_path == std::path::Path::new("file_a.txt"))
+        .unwrap();
     assert_eq!(mod_a.kind, ChangeKind::Modified);
-    let new_b = diff_1_2.iter().find(|d| d.relative_path == std::path::Path::new("file_b.txt")).unwrap();
+    let new_b = diff_1_2
+        .iter()
+        .find(|d| d.relative_path == std::path::Path::new("file_b.txt"))
+        .unwrap();
     assert_eq!(new_b.kind, ChangeKind::Created);
 
     // 2. Diff from Step 0 to Step 3
     let diff_0_3 = ShadowEngine::diff_checkpoints(&tx, 0, 3).unwrap();
     // In step 3: file_b and file_c exist; file_a is gone
-    let has_b = diff_0_3.iter().any(|d| d.relative_path == std::path::Path::new("file_b.txt"));
-    let has_c = diff_0_3.iter().any(|d| d.relative_path == std::path::Path::new("file_c.txt"));
+    let has_b = diff_0_3
+        .iter()
+        .any(|d| d.relative_path == std::path::Path::new("file_b.txt"));
+    let has_c = diff_0_3
+        .iter()
+        .any(|d| d.relative_path == std::path::Path::new("file_c.txt"));
     assert!(has_b);
     assert!(has_c);
 

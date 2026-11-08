@@ -77,12 +77,17 @@ impl LifecycleHooks {
                 cmd.env(key, val);
             }
             cmd.env("SAVEPOINT_HOOK", hook_name);
-            cmd.env("SAVEPOINT_WORKSPACE", workspace_root.to_string_lossy().to_string());
+            cmd.env(
+                "SAVEPOINT_WORKSPACE",
+                workspace_root.to_string_lossy().to_string(),
+            );
 
-            let output = cmd.output().map_err(|e| SavepointError::Other(format!(
-                "Failed to execute hook '{}' command '{}': {}",
-                hook_name, cmd_str, e
-            )))?;
+            let output = cmd.output().map_err(|e| {
+                SavepointError::Other(format!(
+                    "Failed to execute hook '{}' command '{}': {}",
+                    hook_name, cmd_str, e
+                ))
+            })?;
 
             let success = output.status.success();
             let exit_code = output.status.code();

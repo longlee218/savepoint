@@ -1,6 +1,6 @@
+use savepoint_core::{Result, SavepointError};
 use std::fs;
 use std::path::Path;
-use savepoint_core::{Result, SavepointError};
 use walkdir::WalkDir;
 
 #[cfg(target_os = "macos")]
@@ -138,7 +138,9 @@ pub fn fallback_copy_tree(src: &Path, dst: &Path) -> Result<()> {
         } else if ft.is_symlink() {
             copy_symlink(entry.path(), &target_path)?;
         } else if ft.is_file() {
-            let meta = entry.metadata().map_err(|e| SavepointError::Other(e.to_string()))?;
+            let meta = entry
+                .metadata()
+                .map_err(|e| SavepointError::Other(e.to_string()))?;
             copy_single_file_preserving_mtime(entry.path(), &target_path, &meta)?;
         }
     }

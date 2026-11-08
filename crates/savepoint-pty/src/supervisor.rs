@@ -1,10 +1,10 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use savepoint_core::{Result, SavepointError};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::thread;
-use savepoint_core::{Result, SavepointError};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SupervisorEvent {
@@ -26,8 +26,8 @@ pub fn filter_input_bytes(input: &[u8]) -> (Vec<u8>, Vec<SupervisorEvent>) {
 
     for &byte in input {
         match byte {
-            0x12 => events.push(SupervisorEvent::RewindRequested),       // Ctrl+R
-            0x13 => events.push(SupervisorEvent::CheckpointRequested),   // Ctrl+S
+            0x12 => events.push(SupervisorEvent::RewindRequested), // Ctrl+R
+            0x13 => events.push(SupervisorEvent::CheckpointRequested), // Ctrl+S
             other => forwarded.push(other),
         }
     }
@@ -38,11 +38,7 @@ pub fn filter_input_bytes(input: &[u8]) -> (Vec<u8>, Vec<SupervisorEvent>) {
 impl PtySupervisor {
     /// Spawns a child command in an isolated PTY, streaming I/O.
     /// Intercepts Ctrl+R (0x12) and Ctrl+S (0x13) to emit `SupervisorEvent`.
-    pub fn spawn(
-        program: &str,
-        args: &[&str],
-        cwd: Option<&std::path::Path>,
-    ) -> Result<Self> {
+    pub fn spawn(program: &str, args: &[&str], cwd: Option<&std::path::Path>) -> Result<Self> {
         let pty_system = native_pty_system();
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let pair = pty_system
@@ -132,10 +128,7 @@ impl PtySupervisor {
             }
         });
 
-        Ok(Self {
-            events_rx,
-            running,
-        })
+        Ok(Self { events_rx, running })
     }
 
     pub fn is_running(&self) -> bool {

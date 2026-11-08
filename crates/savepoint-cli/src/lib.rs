@@ -1,8 +1,4 @@
 use clap::{Parser, Subcommand};
-use std::fs;
-use std::io::{stdout, Write};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
 use savepoint_core::ChangeKind;
 use savepoint_fs::{FlightRecorder, ShadowEngine};
 use savepoint_mcp::protocol::JsonRpcRequest;
@@ -10,6 +6,10 @@ use savepoint_mcp::McpHandler;
 use savepoint_pty::{PtySupervisor, RawTerminalGuard, SupervisorEvent};
 use savepoint_speculate::{SpeculativeCandidate, SpeculativeEngine};
 use savepoint_tui::{run_timeline, TimelineAction};
+use std::fs;
+use std::io::{stdout, Write};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 #[derive(Parser)]
 #[command(
@@ -230,9 +230,15 @@ pub fn run_cli() -> anyhow::Result<()> {
             println!("  Changes : {} file(s)", cp.deltas.len());
             for delta in &cp.deltas {
                 match delta.kind {
-                    ChangeKind::Created => println!("    \x1b[32mA  {}\x1b[0m", delta.relative_path.display()),
-                    ChangeKind::Modified => println!("    \x1b[33mM  {}\x1b[0m", delta.relative_path.display()),
-                    ChangeKind::Deleted => println!("    \x1b[31mD  {}\x1b[0m", delta.relative_path.display()),
+                    ChangeKind::Created => {
+                        println!("    \x1b[32mA  {}\x1b[0m", delta.relative_path.display())
+                    }
+                    ChangeKind::Modified => {
+                        println!("    \x1b[33mM  {}\x1b[0m", delta.relative_path.display())
+                    }
+                    ChangeKind::Deleted => {
+                        println!("    \x1b[31mD  {}\x1b[0m", delta.relative_path.display())
+                    }
                 }
             }
         }
@@ -298,7 +304,9 @@ pub fn run_cli() -> anyhow::Result<()> {
                     fs::write(cmd_dir.join(format!("sp:{}.md", name)), content)?;
                 }
 
-                println!("\x1b[32m[savepoint]\x1b[0m Installed Claude Code namespaced slash commands:");
+                println!(
+                    "\x1b[32m[savepoint]\x1b[0m Installed Claude Code namespaced slash commands:"
+                );
                 println!("  Directory : {:?}", cmd_dir);
                 println!("  Namespace : \x1b[33msp:*\x1b[0m");
                 println!("  Commands  :");
@@ -312,10 +320,18 @@ pub fn run_cli() -> anyhow::Result<()> {
         },
         Commands::Run { command } => {
             let cwd = std::env::current_dir()?;
-            println!("\x1b[36m[savepoint]\x1b[0m Starting supervised session for \x1b[1m{:?}\x1b[0m", command);
+            println!(
+                "\x1b[36m[savepoint]\x1b[0m Starting supervised session for \x1b[1m{:?}\x1b[0m",
+                command
+            );
             let mut tx = ShadowEngine::begin_transaction(&cwd)?;
-            println!("\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m active.", tx.id);
-            println!("\x1b[90m  Hotkeys: [Ctrl+S] Save checkpoint | [Ctrl+R] Open TUI timeline\x1b[0m");
+            println!(
+                "\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m active.",
+                tx.id
+            );
+            println!(
+                "\x1b[90m  Hotkeys: [Ctrl+S] Save checkpoint | [Ctrl+R] Open TUI timeline\x1b[0m"
+            );
             println!("\x1b[90m  Slash  : /sp:save | /sp:undo | /sp:timeline | /sp:diff\x1b[0m\r\n");
 
             let program = &command[0];
@@ -327,11 +343,16 @@ pub fn run_cli() -> anyhow::Result<()> {
             let supervisor = PtySupervisor::spawn(program, &args, Some(&cwd))?;
 
             while supervisor.is_running() {
-                match supervisor.events_rx.recv_timeout(Duration::from_millis(1500)) {
+                match supervisor
+                    .events_rx
+                    .recv_timeout(Duration::from_millis(1500))
+                {
                     Ok(event) => match event {
                         SupervisorEvent::CheckpointRequested => {
                             let start = Instant::now();
-                            if let Ok(cp) = ShadowEngine::checkpoint(&mut tx, Some("Manual (Ctrl+S)"), None) {
+                            if let Ok(cp) =
+                                ShadowEngine::checkpoint(&mut tx, Some("Manual (Ctrl+S)"), None)
+                            {
                                 print!(
                                     "\r\n\x1b[32m[savepoint] Checkpoint #{} saved in {:?} ({} files)\x1b[0m\r\n",
                                     cp.step_index,
@@ -345,7 +366,8 @@ pub fn run_cli() -> anyhow::Result<()> {
                             // Drop raw terminal mode so Ratatui TUI takes over smoothly
                             drop(guard.take());
 
-                            let live_deltas = ShadowEngine::compute_live_deltas(&tx).unwrap_or_default();
+                            let live_deltas =
+                                ShadowEngine::compute_live_deltas(&tx).unwrap_or_default();
 
                             // Launch the interactive TUI timeline
                             if let Ok(action) = run_timeline(tx.clone(), live_deltas) {
@@ -375,7 +397,10 @@ pub fn run_cli() -> anyhow::Result<()> {
                             drop(guard.take());
                             println!("\r\n\x1b[36m[savepoint]\x1b[0m Child process exited with status {}.", code);
                             let _ = ShadowEngine::commit(&mut tx);
-                            println!("\x1b[32m[savepoint]\x1b[0m Transaction {} committed.\x1b[0m", tx.id);
+                            println!(
+                                "\x1b[32m[savepoint]\x1b[0m Transaction {} committed.\x1b[0m",
+                                tx.id
+                            );
                             break;
                         }
                     },
@@ -416,7 +441,10 @@ pub fn run_cli() -> anyhow::Result<()> {
                 }
                 TimelineAction::Commit => {
                     ShadowEngine::commit(&mut tx)?;
-                    println!("\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m committed.\x1b[0m", tx.id);
+                    println!(
+                        "\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m committed.\x1b[0m",
+                        tx.id
+                    );
                 }
                 TimelineAction::Cancel => {}
             }
@@ -437,7 +465,10 @@ pub fn run_cli() -> anyhow::Result<()> {
                     if json {
                         println!("null");
                     } else {
-                        println!("\x1b[33mNo active Savepoint transaction in {:?}\x1b[0m", path);
+                        println!(
+                            "\x1b[33mNo active Savepoint transaction in {:?}\x1b[0m",
+                            path
+                        );
                     }
                     return Ok(());
                 }
@@ -450,13 +481,21 @@ pub fn run_cli() -> anyhow::Result<()> {
 
             println!("\x1b[1mSavepoint Transaction: {}\x1b[0m", tx.id);
             println!("  Status    : {:?}", tx.status);
-            println!("  Branch    : \x1b[32m* {}\x1b[0m (all: {})", tx.active_branch, tx.branch_names().join(", "));
+            println!(
+                "  Branch    : \x1b[32m* {}\x1b[0m (all: {})",
+                tx.active_branch,
+                tx.branch_names().join(", ")
+            );
             println!("  HEAD      : #{:02}", tx.active_step());
             println!("  Workspace : {:?}", tx.workspace_root);
             println!("  Timeline  : {} checkpoint(s)", tx.checkpoints.len());
 
             for cp in &tx.checkpoints {
-                let marker = if cp.step_index == tx.active_step() { "*" } else { " " };
+                let marker = if cp.step_index == tx.active_step() {
+                    "*"
+                } else {
+                    " "
+                };
                 println!(
                     "  {} \x1b[36m#{:02}\x1b[0m [{}] {:>2}f  {}",
                     marker,
@@ -502,11 +541,18 @@ pub fn run_cli() -> anyhow::Result<()> {
 
             println!("\x1b[32m[savepoint]\x1b[0m Transaction \x1b[1m{}\x1b[0m committed in \x1b[36m{:?}\x1b[0m", tx.id, elapsed);
         }
-        Commands::ToGit { message, step, path } => {
+        Commands::ToGit {
+            message,
+            step,
+            path,
+        } => {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
-                    eprintln!("\x1b[31merror: no active Savepoint transaction found in {:?}\x1b[0m", path);
+                    eprintln!(
+                        "\x1b[31merror: no active Savepoint transaction found in {:?}\x1b[0m",
+                        path
+                    );
                     return Ok(());
                 }
             };
@@ -517,11 +563,19 @@ pub fn run_cli() -> anyhow::Result<()> {
                 "\x1b[32m[savepoint]\x1b[0m Squashed {} step(s) into Git commit \x1b[1m{}\x1b[0m in \x1b[36m{:?}\x1b[0m",
                 res.steps_squashed, res.commit_hash, start.elapsed()
             );
-            println!("  Summary    : {}", res.commit_message.lines().next().unwrap_or(""));
+            println!(
+                "  Summary    : {}",
+                res.commit_message.lines().next().unwrap_or("")
+            );
             println!("  Files      : {} file delta(s)", res.files_changed);
             println!("  Status     : Savepoint transaction committed; Git working tree in sync.");
         }
-        Commands::Diff { from, to, json, path } => {
+        Commands::Diff {
+            from,
+            to,
+            json,
+            path,
+        } => {
             let tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
@@ -560,9 +614,15 @@ pub fn run_cli() -> anyhow::Result<()> {
                 println!("\x1b[1m{} ({} files):\x1b[0m", title, deltas.len());
                 for delta in &deltas {
                     match delta.kind {
-                        ChangeKind::Created => println!("  \x1b[32mA  {}\x1b[0m", delta.relative_path.display()),
-                        ChangeKind::Modified => println!("  \x1b[33mM  {}\x1b[0m", delta.relative_path.display()),
-                        ChangeKind::Deleted => println!("  \x1b[31mD  {}\x1b[0m", delta.relative_path.display()),
+                        ChangeKind::Created => {
+                            println!("  \x1b[32mA  {}\x1b[0m", delta.relative_path.display())
+                        }
+                        ChangeKind::Modified => {
+                            println!("  \x1b[33mM  {}\x1b[0m", delta.relative_path.display())
+                        }
+                        ChangeKind::Deleted => {
+                            println!("  \x1b[31mD  {}\x1b[0m", delta.relative_path.display())
+                        }
                     }
                 }
             }
@@ -590,7 +650,11 @@ pub fn run_cli() -> anyhow::Result<()> {
             println!("\x1b[1mBranches in Transaction {}\x1b[0m", tx.id);
             for b in tx.branch_names() {
                 if b == tx.active_branch {
-                    println!("  \x1b[32m* {} (HEAD -> step #{})\x1b[0m", b, tx.branches.get(&b).unwrap_or(&0));
+                    println!(
+                        "  \x1b[32m* {} (HEAD -> step #{})\x1b[0m",
+                        b,
+                        tx.branches.get(&b).unwrap_or(&0)
+                    );
                 } else {
                     println!("    {} (step #{})", b, tx.branches.get(&b).unwrap_or(&0));
                 }
@@ -608,7 +672,11 @@ pub fn run_cli() -> anyhow::Result<()> {
             let step = ShadowEngine::switch_branch(&mut tx, &branch)?;
             println!("\x1b[32m[savepoint]\x1b[0m Switched to branch \x1b[1m'{}'\x1b[0m (Step #{}) in \x1b[36m{:?}\x1b[0m", branch, step, start.elapsed());
         }
-        Commands::Merge { source, target, path } => {
+        Commands::Merge {
+            source,
+            target,
+            path,
+        } => {
             let mut tx = match ShadowEngine::load_active_transaction(&path)? {
                 Some(tx) => tx,
                 None => {
@@ -621,15 +689,21 @@ pub fn run_cli() -> anyhow::Result<()> {
             let cp = ShadowEngine::merge_branch(&mut tx, &source, &target_branch)?;
             println!("\x1b[32m[savepoint]\x1b[0m Merged branch \x1b[1m'{}'\x1b[0m into \x1b[1m'{}'\x1b[0m at Checkpoint #{} in \x1b[36m{:?}\x1b[0m", source, target_branch, cp.step_index, start.elapsed());
         }
-        Commands::Speculate { candidates, validation, path } => {
+        Commands::Speculate {
+            candidates,
+            validation,
+            path,
+        } => {
             let candidates_data = if candidates.trim().starts_with('[') {
                 candidates
             } else {
                 fs::read_to_string(&candidates)?
             };
-            let parsed_candidates: Vec<SpeculativeCandidate> = serde_json::from_str(&candidates_data)?;
+            let parsed_candidates: Vec<SpeculativeCandidate> =
+                serde_json::from_str(&candidates_data)?;
             let start = Instant::now();
-            let summary = SpeculativeEngine::evaluate_and_converge(&path, parsed_candidates, &validation)?;
+            let summary =
+                SpeculativeEngine::evaluate_and_converge(&path, parsed_candidates, &validation)?;
             println!("\x1b[1mSavepoint Speculative Execution\x1b[0m");
             println!("  Candidates evaluated : {}", summary.total_candidates);
             println!("  Elapsed time         : {:?}", start.elapsed());
@@ -642,8 +716,18 @@ pub fn run_cli() -> anyhow::Result<()> {
                 }
             }
             for rep in &summary.candidate_reports {
-                let status_icon = if rep.passed { "\x1b[32mPASS\x1b[0m" } else { "\x1b[31mFAIL\x1b[0m" };
-                println!("    {} [{}] in {:?} ({} files modified)", status_icon, rep.branch_name, Duration::from_millis(rep.duration_ms as u64), rep.modified_files_count);
+                let status_icon = if rep.passed {
+                    "\x1b[32mPASS\x1b[0m"
+                } else {
+                    "\x1b[31mFAIL\x1b[0m"
+                };
+                println!(
+                    "    {} [{}] in {:?} ({} files modified)",
+                    status_icon,
+                    rep.branch_name,
+                    Duration::from_millis(rep.duration_ms as u64),
+                    rep.modified_files_count
+                );
             }
         }
         Commands::Mcp => {
@@ -693,13 +777,21 @@ pub fn run_cli() -> anyhow::Result<()> {
                 stats.scrubbed_files_count, stats.scrubbed_secrets_count
             );
         }
-        Commands::Replay { bundle, step, dry_run, path } => {
+        Commands::Replay {
+            bundle,
+            step,
+            dry_run,
+            path,
+        } => {
             if dry_run {
                 let flight_bundle = FlightRecorder::inspect_bundle(&bundle)?;
                 println!("\x1b[1m[DRY-RUN] Flight Recorder Bundle Inspection\x1b[0m");
                 println!("  Transaction ID  : {}", flight_bundle.transaction.id);
                 println!("  Created At      : {}", flight_bundle.created_at);
-                println!("  Checkpoints     : {}", flight_bundle.transaction.checkpoints.len());
+                println!(
+                    "  Checkpoints     : {}",
+                    flight_bundle.transaction.checkpoints.len()
+                );
                 if let Some(pinned) = flight_bundle.pinned_step {
                     println!("  Pinned Step     : #{}", pinned);
                 }
@@ -708,7 +800,11 @@ pub fn run_cli() -> anyhow::Result<()> {
                     .unwrap_or(flight_bundle.transaction.active_step());
                 println!("  Target Step     : #{}", target_step);
                 if let Some(files) = flight_bundle.step_files.get(&target_step) {
-                    println!("  Files at Step #{:02} ({} files):", target_step, files.len());
+                    println!(
+                        "  Files at Step #{:02} ({} files):",
+                        target_step,
+                        files.len()
+                    );
                     for (rel, state) in files {
                         match state {
                             savepoint_fs::BundleFileState::Present { .. } => {

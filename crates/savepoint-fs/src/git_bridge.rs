@@ -109,7 +109,9 @@ pub fn squash_transaction_to_git(
         .output()
         .map_err(|e| SavepointError::Other(format!("Failed to run git rev-parse: {}", e)))?;
 
-    let commit_hash = String::from_utf8_lossy(&rev_output.stdout).trim().to_string();
+    let commit_hash = String::from_utf8_lossy(&rev_output.stdout)
+        .trim()
+        .to_string();
 
     // 8. Commit Savepoint transaction so working tree and transaction pointer are finalized
     crate::engine::ShadowEngine::commit(tx)?;

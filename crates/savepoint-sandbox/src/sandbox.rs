@@ -1,3 +1,5 @@
+use savepoint_core::{ChangeKind, FileDelta, Result, SavepointError};
+use savepoint_fs::{clone_tree, clone_workspace, compute_deltas, ShadowEngine};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
@@ -5,8 +7,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use savepoint_core::{ChangeKind, FileDelta, Result, SavepointError};
-use savepoint_fs::{clone_tree, clone_workspace, compute_deltas, ShadowEngine};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -60,8 +60,10 @@ pub struct Sandbox {
 impl Sandbox {
     /// Creates a new ephemeral CoW sandbox cloned from `source_workspace` with default configuration.
     pub fn create(source_workspace: &Path, id: Option<&str>) -> Result<Self> {
-        let mut cfg = SandboxConfig::default();
-        cfg.id = id.map(|s| s.to_string());
+        let cfg = SandboxConfig {
+            id: id.map(|s| s.to_string()),
+            ..Default::default()
+        };
         Self::create_with_config(source_workspace, cfg)
     }
 
@@ -69,10 +71,12 @@ impl Sandbox {
     /// Places the sandbox on the same filesystem device (`st_dev`) via `ShadowEngine::resolve_storage_dir`
     /// and clones top-level entries via `clone_workspace` (skipping `.git` and `.savepoint`).
     pub fn create_with_config(source_workspace: &Path, config: SandboxConfig) -> Result<Self> {
-        let canonical_source = source_workspace.canonicalize().map_err(|e| SavepointError::Io {
-            path: source_workspace.to_path_buf(),
-            source: e,
-        })?;
+        let canonical_source = source_workspace
+            .canonicalize()
+            .map_err(|e| SavepointError::Io {
+                path: source_workspace.to_path_buf(),
+                source: e,
+            })?;
 
         let sandbox_id = match &config.id {
             Some(id) => {
@@ -151,7 +155,10 @@ impl Sandbox {
         // Environment & Port Virtualization
         let sp_tmp = self.path.join(".sp-tmp");
         let _ = fs::create_dir_all(&sp_tmp);
-        let assigned_port = self.config.base_port.saturating_add(self.config.port_offset);
+        let assigned_port = self
+            .config
+            .base_port
+            .saturating_add(self.config.port_offset);
         command.env("SAVEPOINT_SANDBOX_ID", &self.id);
         command.env("SAVEPOINT_PORT_OFFSET", self.config.port_offset.to_string());
         command.env("PORT", assigned_port.to_string());

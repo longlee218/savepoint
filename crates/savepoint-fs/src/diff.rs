@@ -1,10 +1,10 @@
+use savepoint_core::{ChangeKind, FileDelta, Result, SavepointError};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
-use savepoint_core::{ChangeKind, FileDelta, Result, SavepointError};
 
 pub const HEAVY_CACHE_DIRS: &[&str] = &[
     "target",
@@ -93,17 +93,18 @@ pub fn compute_deltas(base_dir: &Path, current_dir: &Path) -> Result<Vec<FileDel
                     let base_file = base_dir.join(&rel);
                     let current_file = entry.path();
 
-                    let has_changed = if old_stat.is_symlink != is_symlink || old_stat.size != new_size {
-                        true
-                    } else if old_stat.mtime == new_mtime && old_stat.mtime_nsec == new_nsec {
-                        // Stage 1 Fast-Path: size and nanosecond mtime match -> Unchanged (0 file opens)
-                        false
-                    } else if is_symlink {
-                        symlinks_differ(&base_file, current_file)?
-                    } else {
-                        // Stage 2: 64KB chunked stream comparison
-                        files_differ_streamed(&base_file, current_file)?
-                    };
+                    let has_changed =
+                        if old_stat.is_symlink != is_symlink || old_stat.size != new_size {
+                            true
+                        } else if old_stat.mtime == new_mtime && old_stat.mtime_nsec == new_nsec {
+                            // Stage 1 Fast-Path: size and nanosecond mtime match -> Unchanged (0 file opens)
+                            false
+                        } else if is_symlink {
+                            symlinks_differ(&base_file, current_file)?
+                        } else {
+                            // Stage 2: 64KB chunked stream comparison
+                            files_differ_streamed(&base_file, current_file)?
+                        };
 
                     if has_changed {
                         deltas.push(FileDelta {

@@ -1,7 +1,7 @@
-use std::fs;
-use tempfile::tempdir_in;
 use savepoint_core::TransactionStatus;
 use savepoint_fs::engine::ShadowEngine;
+use std::fs;
+use tempfile::tempdir_in;
 
 #[test]
 fn test_engine_transaction_lifecycle() {
@@ -12,7 +12,11 @@ fn test_engine_transaction_lifecycle() {
     // 1. Setup workspace with initial files
     fs::create_dir_all(ws.join("src")).unwrap();
     fs::write(ws.join("src/main.rs"), "fn main() { println!(\"v1\"); }").unwrap();
-    fs::write(ws.join("src/lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }").unwrap();
+    fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }",
+    )
+    .unwrap();
 
     // 2. Begin transaction
     let mut tx = ShadowEngine::begin_transaction(&ws).expect("Begin transaction failed");
@@ -20,7 +24,11 @@ fn test_engine_transaction_lifecycle() {
     assert_eq!(tx.current_step(), 1); // Step 0 is initial base checkpoint
 
     // 3. Turn 1 (AI modifies src/main.rs and creates src/utils.rs)
-    fs::write(ws.join("src/main.rs"), "fn main() { println!(\"v2 - Turn 1\"); }").unwrap();
+    fs::write(
+        ws.join("src/main.rs"),
+        "fn main() { println!(\"v2 - Turn 1\"); }",
+    )
+    .unwrap();
     fs::write(ws.join("src/utils.rs"), "pub fn helper() {}").unwrap();
 
     let cp1 = ShadowEngine::checkpoint(&mut tx, Some("Turn 1: update main, add utils"), None)
@@ -37,7 +45,10 @@ fn test_engine_transaction_lifecycle() {
     assert_eq!(cp2.step_index, 2);
 
     // Verify workspace is currently corrupted
-    assert_eq!(fs::read_to_string(ws.join("src/lib.rs")).unwrap(), "// CORRUPTED CODE");
+    assert_eq!(
+        fs::read_to_string(ws.join("src/lib.rs")).unwrap(),
+        "// CORRUPTED CODE"
+    );
     assert!(!ws.join("src/utils.rs").exists());
 
     // 5. REWIND to Turn 1!
@@ -57,12 +68,18 @@ fn test_engine_transaction_lifecycle() {
 
     // 5.1 REDO / FAST-FORWARD to Turn 2!
     ShadowEngine::rewind(&mut tx, 2).expect("Fast-forward to Turn 2 failed");
-    assert_eq!(fs::read_to_string(ws.join("src/lib.rs")).unwrap(), "// CORRUPTED CODE");
+    assert_eq!(
+        fs::read_to_string(ws.join("src/lib.rs")).unwrap(),
+        "// CORRUPTED CODE"
+    );
     assert!(!ws.join("src/utils.rs").exists());
 
     // 5.2 REWIND back to Turn 1 again!
     ShadowEngine::rewind(&mut tx, 1).expect("Rewind to Turn 1 failed");
-    assert_eq!(fs::read_to_string(ws.join("src/lib.rs")).unwrap(), "pub fn add(a: i32, b: i32) -> i32 { a + b }");
+    assert_eq!(
+        fs::read_to_string(ws.join("src/lib.rs")).unwrap(),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }"
+    );
     assert!(ws.join("src/utils.rs").exists());
 
     // 6. COMMIT
@@ -94,8 +111,14 @@ fn test_rewind_cleans_up_orphaned_sqlite_wal_and_shm_and_populates_content_hash(
     ShadowEngine::rewind(&mut tx, 0).unwrap();
 
     assert_eq!(fs::read_to_string(&db_path).unwrap(), "sqlite-v1-clean");
-    assert!(!ws.join("app.db-wal").exists(), "orphaned -wal must be removed");
-    assert!(!ws.join("app.db-shm").exists(), "orphaned -shm must be removed");
+    assert!(
+        !ws.join("app.db-wal").exists(),
+        "orphaned -wal must be removed"
+    );
+    assert!(
+        !ws.join("app.db-shm").exists(),
+        "orphaned -shm must be removed"
+    );
 }
 
 #[test]
@@ -115,7 +138,10 @@ fn test_heavy_node_modules_collapsed_in_deltas_and_restored_on_rewind() {
 
     let cp1 = ShadowEngine::checkpoint(&mut tx, Some("upgrade deps"), None).unwrap();
     assert_eq!(cp1.deltas.len(), 1);
-    assert_eq!(cp1.deltas[0].relative_path, std::path::PathBuf::from("node_modules"));
+    assert_eq!(
+        cp1.deltas[0].relative_path,
+        std::path::PathBuf::from("node_modules")
+    );
 
     // Rewind to Step 0 -> pkg_v1 must be restored and pkg_v2 gone!
     ShadowEngine::rewind(&mut tx, 0).unwrap();

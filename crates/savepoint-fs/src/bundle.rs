@@ -1,11 +1,11 @@
+use crate::engine::ShadowEngine;
+use chrono::{DateTime, Utc};
+use savepoint_core::{Result, SavepointError, Transaction};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
-use savepoint_core::{Result, SavepointError, Transaction};
-use crate::engine::ShadowEngine;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlightBundle {
@@ -22,10 +22,7 @@ pub struct FlightBundle {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BundleFileState {
-    Present {
-        content: String,
-        is_hex: bool,
-    },
+    Present { content: String, is_hex: bool },
     Deleted,
 }
 
@@ -106,7 +103,11 @@ impl FlightRecorder {
         // so scrubbed_files_count accurately reflects excluded baseline secret files (e.g. .env)
         if let Some(cp0) = tx.checkpoints.first() {
             if cp0.snapshot_path.exists() {
-                for entry in WalkDir::new(&cp0.snapshot_path).follow_links(false).into_iter().flatten() {
+                for entry in WalkDir::new(&cp0.snapshot_path)
+                    .follow_links(false)
+                    .into_iter()
+                    .flatten()
+                {
                     if entry.file_type().is_file() {
                         if let Ok(rel) = entry.path().strip_prefix(&cp0.snapshot_path) {
                             if is_sensitive_secret_path(rel) {
@@ -122,7 +123,8 @@ impl FlightRecorder {
 
         // 2. Scrub sensitive deltas and scrub prompts/summaries in the exported Transaction metadata
         for cp in &mut tx.checkpoints {
-            cp.deltas.retain(|d| !is_sensitive_secret_path(&d.relative_path));
+            cp.deltas
+                .retain(|d| !is_sensitive_secret_path(&d.relative_path));
             if let Some(ref prompt) = cp.prompt {
                 let (scrubbed, count) = scrub_secrets_in_text(prompt);
                 scrubbed_secrets_count += count;
@@ -224,7 +226,10 @@ impl FlightRecorder {
         let replay_uri = format!("sp://replay/{}", short_id);
         if let Some(cache_dir) = bundle_store_dir() {
             let _ = fs::create_dir_all(&cache_dir);
-            let _ = fs::write(cache_dir.join(format!("{}.spbundle", short_id)), &serialized);
+            let _ = fs::write(
+                cache_dir.join(format!("{}.spbundle", short_id)),
+                &serialized,
+            );
         }
 
         Ok(BundleExportStats {
@@ -397,8 +402,10 @@ fn scrub_secrets_in_text(input: &str) -> (String, usize) {
     while i < bytes.len() {
         let remaining = &input[i..];
         let mut matched_secret_len = None;
-        let is_word_boundary =
-            i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_' || bytes[i - 1] == b'-');
+        let is_word_boundary = i == 0
+            || !(bytes[i - 1].is_ascii_alphanumeric()
+                || bytes[i - 1] == b'_'
+                || bytes[i - 1] == b'-');
 
         if is_word_boundary {
             for &(prefix, min_tail_len) in PREFIXES {
@@ -438,8 +445,10 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(hex: &str) -> Result<Vec<u8>> {
-    if !hex.is_ascii() || hex.len() % 2 != 0 {
-        return Err(SavepointError::Other("Invalid hex string in bundle".to_string()));
+    if !hex.is_ascii() || !hex.len().is_multiple_of(2) {
+        return Err(SavepointError::Other(
+            "Invalid hex string in bundle".to_string(),
+        ));
     }
     let mut out = Vec::with_capacity(hex.len() / 2);
     for i in (0..hex.len()).step_by(2) {

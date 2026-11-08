@@ -45,11 +45,15 @@ fn test_transaction_serialization_roundtrip() {
 
     // Test JSON Serialization
     let json = serde_json::to_string_pretty(&tx).expect("Must serialize transaction");
-    let deserialized: Transaction = serde_json::from_str(&json).expect("Must deserialize transaction");
+    let deserialized: Transaction =
+        serde_json::from_str(&json).expect("Must deserialize transaction");
 
     assert_eq!(deserialized.id, tx_id);
     assert_eq!(deserialized.checkpoints.len(), 1);
-    assert_eq!(deserialized.checkpoints[0].deltas[0].kind, ChangeKind::Modified);
+    assert_eq!(
+        deserialized.checkpoints[0].deltas[0].kind,
+        ChangeKind::Modified
+    );
     assert_eq!(deserialized.active_branch, "experiment");
     assert_eq!(deserialized.branches.get("experiment"), Some(&1));
 }
